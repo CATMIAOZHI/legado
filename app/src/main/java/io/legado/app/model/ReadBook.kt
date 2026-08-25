@@ -4,6 +4,7 @@ import io.legado.app.constant.AppLog
 import io.legado.app.constant.EventBus
 import io.legado.app.constant.PageAnim.scrollPageAnim
 import io.legado.app.constant.PreferKey
+import io.legado.app.api.OperitReadingCompanionBridge
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
@@ -1587,6 +1588,7 @@ object ReadBook : CoroutineScope by MainScope() {
             safeSnapshot = readableSnapshot,
         )
         if (!liveReadableBoundaryRef.compareAndSet(expectedBoundary, publishedBoundary)) return
+        OperitReadingCompanionBridge.notifyReadingProgressChanged()
         executor.execute {
             if (liveReadableBoundaryRef.get() !== publishedBoundary) return@execute
             kotlin.runCatching {

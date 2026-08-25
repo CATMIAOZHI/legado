@@ -14,6 +14,7 @@ import io.legado.app.constant.AppLog
 import io.legado.app.constant.EventBus
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
+import io.legado.app.api.OperitReviewParagraphContractSupport
 import io.legado.app.help.book.BookContent
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.config.ReadBookConfig
@@ -203,6 +204,9 @@ object ChapterProvider {
     private var reviewKeyProvider: ((Int, Int) -> String?)? = null
 
     @Volatile
+    private var reviewPreviewProvider: ((Int, Int) -> String?)? = null
+
+    @Volatile
     private var reviewProviderChapterIndex: Int? = null
 
     private val reviewColumnLock = Any()
@@ -255,6 +259,8 @@ object ChapterProvider {
             isTransient = !saveChapterData,
         ).apply {
             bodyContent = bookContent.toString()
+            operitReviewContractHash =
+                OperitReviewParagraphContractSupport.fromTextList(bookContent.textList)?.hash
             createLayout(scope, book, bookContent, saveChapterData)
         }
 
@@ -312,10 +318,12 @@ object ChapterProvider {
         countProvider: ((Int, Int) -> Int)?,
         keyProvider: ((Int, Int) -> String?)?,
         chapterIndex: Int? = ReadBook.durChapterIndex,
+        previewProvider: ((Int, Int) -> String?)? = null,
     ) {
         synchronized(reviewColumnLock) {
             reviewCountProvider = countProvider
             reviewKeyProvider = keyProvider
+            reviewPreviewProvider = previewProvider
             reviewProviderChapterIndex = chapterIndex.takeIf { countProvider != null }
             refreshReviewColumnsLocked()
         }
@@ -348,6 +356,17 @@ object ChapterProvider {
         chapterIndex: Int = ReadBook.durChapterIndex,
     ): String? {
         return reviewKeyProvider?.invoke(chapterIndex, reviewId)?.takeIf { it.isNotBlank() }
+    }
+
+    fun getReviewPreview(
+        reviewId: Int,
+        chapterIndex: Int = ReadBook.durChapterIndex,
+    ): String? {
+        if (chapterIndex != reviewProviderChapterIndex) return null
+        return reviewPreviewProvider
+            ?.invoke(chapterIndex, reviewId)
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
     }
 
     fun refreshReviewColumns() {

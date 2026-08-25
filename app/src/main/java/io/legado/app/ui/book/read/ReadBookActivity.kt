@@ -4,7 +4,9 @@ import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.res.Configuration
+import android.database.ContentObserver
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Looper
@@ -15,6 +17,9 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.TextView
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -28,6 +33,8 @@ import com.jaredrummler.android.colorpicker.ColorPickerDialog
 import com.jaredrummler.android.colorpicker.ColorPickerDialogListener
 import io.legado.app.BuildConfig
 import io.legado.app.R
+import io.legado.app.api.OperitAiReviewClient
+import io.legado.app.api.OperitAiReviewSummary
 import io.legado.app.constant.AppConst
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.BookType
@@ -320,6 +327,31 @@ class ReadBookActivity : BaseReadBookActivity(),
         ): Boolean = size > 5
     }
     private val reviewSummaryPrefetchingKeys = HashSet<String>()
+    private var activeNativeReviewSummary: ReviewRuleParser.SummaryResult? = null
+    private var activeAiReviewSummary: OperitAiReviewSummary? = null
+    private var activeAiReviewKey: String? = null
+    private var aiReviewLoadingKey: String? = null
+    private var aiReviewAppliedKey: String? = null
+    private var aiReviewRequestGeneration = 0L
+    private var aiReviewRefreshPending = false
+    private var combinedReviewSignature: String? = null
+    private var aiReviewPreviewView: TextView? = null
+    private var aiReviewPreviewRunnable: Runnable? = null
+    private val shownAiReviewPreviews = HashSet<String>()
+    private val aiReviewRefreshRunnable = Runnable {
+        aiReviewAppliedKey = null
+        loadReviewSummaryIfNeeded()
+    }
+    private val aiReviewContentObserver by lazy {
+        object : ContentObserver(handler) {
+            override fun onChange(selfChange: Boolean) {
+                aiReviewRefreshPending = true
+                handler.removeCallbacks(aiReviewRefreshRunnable)
+                handler.postDelayed(aiReviewRefreshRunnable, AI_REVIEW_REFRESH_DEBOUNCE_MS)
+            }
+        }
+    }
+    private val registeredAiReviewRoots = HashSet<Uri>()
 
     //恢复跳转前进度对话框的交互结果
     private var confirmRestoreProcess: Boolean? = null
@@ -356,6 +388,7 @@ class ReadBookActivity : BaseReadBookActivity(),
         window.setBackgroundDrawable(null)
         upScreenTimeOut()
         ReadBook.register(this)
+        registerAiReviewObserver()
         onBackPressedDispatcher.addCallback(this) {
             if (isShowingSearchResult) {
                 exitSearchMenu()
@@ -431,6 +464,7 @@ class ReadBookActivity : BaseReadBookActivity(),
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onResume() {
         super.onResume()
+        registerAiReviewObserver()
         ReadBook.readStartTime = System.currentTimeMillis()
         if (bookChanged) {
             bookChanged = false
@@ -449,6 +483,10 @@ class ReadBookActivity : BaseReadBookActivity(),
         binding.readView.upTime()
         updateReadAloudFloatBar()
         screenOffTimerStart()
+        handler.post {
+            aiReviewAppliedKey = null
+            loadReviewSummaryIfNeeded()
+        }
         // 网络监听，当从无网切换到网络环境时同步进度（注意注册的同时就会收到监听，因此界面激活时无需重复执行同步操作）
         networkChangedListener.register()
         networkChangedListener.onNetworkChanged = {
@@ -780,6 +818,14 @@ class ReadBookActivity : BaseReadBookActivity(),
         synchronized(reviewSummaryPrefetchingKeys) {
             reviewSummaryPrefetchingKeys.clear()
         }
+        activeNativeReviewSummary = null
+        activeAiReviewSummary = null
+        activeAiReviewKey = null
+        aiReviewLoadingKey = null
+        aiReviewAppliedKey = null
+        aiReviewRequestGeneration++
+        aiReviewRefreshPending = false
+        combinedReviewSignature = null
         ChapterProvider.clearReviewProviders()
     }
 
@@ -1374,6 +1420,7 @@ class ReadBookActivity : BaseReadBookActivity(),
     override fun pageChanged() {
         pageChanged = true
         binding.readView.onPageChange()
+        scheduleAiReviewPreview()
         highlightPopup?.dismiss()
         handler.post {
             upBookmarkIndicator()
@@ -1793,57 +1840,53 @@ class ReadBookActivity : BaseReadBookActivity(),
             toastOnUi(R.string.review_empty)
             return
         }
-        val source = ReadBook.bookSource ?: return
-        if (source.isJsSource()) {
-            val book = ReadBook.book ?: return
-            showDialogFragment(
-                ReviewDetailDialog(
-                    paragraphNum = paragraphNum,
-                    totalCount = count,
-                    chapterIndex = chapterIndex,
-                    paragraphData = ChapterProvider.getReviewKeyById(paragraphNum, chapterIndex),
-                    bookUrl = book.bookUrl,
-                    sourceKey = source.getKey(),
-                    ruleHash = source.mainJs.hashCode(),
-                )
-            )
-            return
-        }
-        val rule = source.ruleReview ?: run {
-            toastOnUi(R.string.review_rule_missing)
-            return
-        }
-        if (!rule.enabled) {
-            toastOnUi(R.string.review_rule_missing)
-            return
-        }
-        if (rule.reviewDetailUrl.isNullOrBlank()) {
-            toastOnUi(R.string.review_detail_url_missing)
-            return
-        }
-        if (rule.detailListRule.isNullOrBlank() || rule.detailContentRule.isNullOrBlank()) {
-            toastOnUi(R.string.review_detail_rule_missing)
-            return
-        }
         val book = ReadBook.book ?: return
+        val aiSummary = activeAiReviewSummary
+        val aiCount = aiSummary?.counts?.get(paragraphNum) ?: 0
+        val nativeCount = activeNativeReviewSummary?.counts?.get(paragraphNum) ?: 0
+        val source = ReadBook.bookSource
+        var nativeAvailable = false
+        var sourceKey = ""
+        var ruleHash = 0
+        if (nativeCount > 0 && source != null) {
+            if (source.isJsSource()) {
+                nativeAvailable = true
+                sourceKey = source.getKey()
+                ruleHash = source.mainJs.hashCode()
+            } else {
+                val rule = source.ruleReview
+                nativeAvailable = rule != null &&
+                    rule.enabled &&
+                    !rule.reviewDetailUrl.isNullOrBlank() &&
+                    !rule.detailListRule.isNullOrBlank() &&
+                    !rule.detailContentRule.isNullOrBlank()
+                if (nativeAvailable && rule != null) {
+                    sourceKey = source.getKey()
+                    ruleHash = rule.hashCode()
+                }
+            }
+        }
+        val availableCount = (if (nativeAvailable) nativeCount else 0) + aiCount
+        if (availableCount <= 0) {
+            toastOnUi(R.string.review_empty)
+            return
+        }
         showDialogFragment(
             ReviewDetailDialog(
                 paragraphNum = paragraphNum,
-                totalCount = count,
+                totalCount = availableCount,
                 chapterIndex = chapterIndex,
                 paragraphData = ChapterProvider.getReviewKeyById(paragraphNum, chapterIndex),
                 bookUrl = book.bookUrl,
-                sourceKey = source.getKey(),
-                ruleHash = rule.hashCode()
+                sourceKey = sourceKey,
+                ruleHash = ruleHash,
+                aiAuthority = aiSummary?.authority,
+                aiContentHash = aiSummary?.contentHash,
             )
         )
     }
 
     private fun loadReviewSummaryIfNeeded() {
-        val source = ReadBook.bookSource ?: run {
-            clearReviewSummaryProviders()
-            return
-        }
         val book = ReadBook.book ?: run {
             clearReviewSummaryProviders()
             return
@@ -1857,18 +1900,24 @@ class ReadBookActivity : BaseReadBookActivity(),
             clearReviewSummaryProviders()
             return
         }
+        loadAiReviewSummaryIfNeeded(book, chapterIndex, textChapter)
+
+        val source = ReadBook.bookSource ?: run {
+            clearNativeReviewSummary()
+            return
+        }
 
         if (source.isJsSource()) {
             loadJsReviewSummaryIfNeeded(book, source, chapterIndex)
             return
         }
         val rule = source.ruleReview ?: run {
-            clearReviewSummaryProviders()
+            clearNativeReviewSummary()
             return
         }
         val summaryUrl = rule.configuredSummaryUrl()
         if (summaryUrl == null) {
-            clearReviewSummaryProviders()
+            clearNativeReviewSummary()
             return
         }
 
@@ -1883,7 +1932,8 @@ class ReadBookActivity : BaseReadBookActivity(),
         reviewSummaryLoadingKey = key
         val requestToken = ++reviewSummaryRequestToken
         if (reviewSummaryAppliedKey != key) {
-            ChapterProvider.clearReviewProviders()
+            activeNativeReviewSummary = null
+            applyCombinedReviewProviders(chapterIndex)
         }
         Coroutine.async(lifecycleScope, IO) {
             val chapter = appDb.bookChapterDao.getChapter(book.bookUrl, chapterIndex)
@@ -1922,7 +1972,7 @@ class ReadBookActivity : BaseReadBookActivity(),
             )
             if (currentKey != key) return@onSuccess
             if (result == null) {
-                ChapterProvider.clearReviewProviders()
+                clearNativeReviewSummary()
                 return@onSuccess
             }
             synchronized(reviewSummaryCache) {
@@ -1943,7 +1993,7 @@ class ReadBookActivity : BaseReadBookActivity(),
                     ReadBook.durChapterIndex
                 ) != key
             ) return@onError
-            ChapterProvider.clearReviewProviders()
+            clearNativeReviewSummary()
             AppLog.put("加载段评统计出错\n${it.localizedMessage}", it)
         }
     }
@@ -1964,7 +2014,8 @@ class ReadBookActivity : BaseReadBookActivity(),
         reviewSummaryLoadingKey = key
         val requestToken = ++reviewSummaryRequestToken
         if (reviewSummaryAppliedKey != key) {
-            ChapterProvider.clearReviewProviders()
+            activeNativeReviewSummary = null
+            applyCombinedReviewProviders(chapterIndex)
         }
         Coroutine.async(lifecycleScope, IO) {
             val chapter = appDb.bookChapterDao.getChapter(book.bookUrl, chapterIndex)
@@ -1986,7 +2037,8 @@ class ReadBookActivity : BaseReadBookActivity(),
             if (currentKey != key) return@onSuccess
             if (result == null) {
                 reviewSummaryAppliedKey = key
-                ChapterProvider.clearReviewProviders()
+                activeNativeReviewSummary = null
+                applyCombinedReviewProviders(chapterIndex)
                 return@onSuccess
             }
             synchronized(reviewSummaryCache) {
@@ -2006,7 +2058,7 @@ class ReadBookActivity : BaseReadBookActivity(),
                     ReadBook.durChapterIndex,
                 ) != key
             ) return@onError
-            ChapterProvider.clearReviewProviders()
+            clearNativeReviewSummary()
             AppLog.put("加载 JavaScript 段评统计出错\n${it.localizedMessage}", it)
         }
     }
@@ -2015,7 +2067,23 @@ class ReadBookActivity : BaseReadBookActivity(),
         reviewSummaryRequestToken++
         reviewSummaryAppliedKey = null
         reviewSummaryLoadingKey = null
+        activeNativeReviewSummary = null
+        activeAiReviewSummary = null
+        activeAiReviewKey = null
+        aiReviewLoadingKey = null
+        aiReviewAppliedKey = null
+        aiReviewRequestGeneration++
+        aiReviewRefreshPending = false
+        combinedReviewSignature = null
         ChapterProvider.clearReviewProviders()
+    }
+
+    private fun clearNativeReviewSummary() {
+        reviewSummaryRequestToken++
+        reviewSummaryAppliedKey = null
+        reviewSummaryLoadingKey = null
+        activeNativeReviewSummary = null
+        applyCombinedReviewProviders(ReadBook.durChapterIndex)
     }
 
     private fun applyReviewSummary(
@@ -2023,17 +2091,244 @@ class ReadBookActivity : BaseReadBookActivity(),
         chapterIndex: Int,
         result: ReviewRuleParser.SummaryResult
     ) {
+        activeNativeReviewSummary = result
+        reviewSummaryAppliedKey = key
+        applyCombinedReviewProviders(chapterIndex)
+    }
+
+    private fun loadAiReviewSummaryIfNeeded(
+        book: Book,
+        chapterIndex: Int,
+        textChapter: io.legado.app.ui.book.read.page.entities.TextChapter?,
+    ) {
+        val contentHash = textChapter
+            ?.takeIf { it.chapter.index == chapterIndex && it.hasBodyContent }
+            ?.operitReviewContractHash
+        if (contentHash == null) {
+            aiReviewRequestGeneration++
+            aiReviewLoadingKey = null
+            aiReviewAppliedKey = null
+            aiReviewRefreshPending = false
+            activeAiReviewSummary = null
+            activeAiReviewKey = null
+            applyCombinedReviewProviders(chapterIndex)
+            return
+        }
+        val key = "${book.bookUrl}#$chapterIndex@$contentHash"
+        if (aiReviewAppliedKey == key && !aiReviewRefreshPending) return
+        if (aiReviewLoadingKey == key) return
+        if (activeAiReviewKey != key) {
+            activeAiReviewSummary = null
+            activeAiReviewKey = null
+            aiReviewAppliedKey = null
+            applyCombinedReviewProviders(chapterIndex)
+        }
+        val requestGeneration = ++aiReviewRequestGeneration
+        aiReviewLoadingKey = key
+        aiReviewRefreshPending = false
+        Coroutine.async(lifecycleScope, IO) {
+            OperitAiReviewClient.getSummary(
+                bookId = book.bookUrl,
+                chapterIndex = chapterIndex,
+                contentHash = contentHash,
+            )
+        }.onSuccess(Main) { result ->
+            if (requestGeneration != aiReviewRequestGeneration) return@onSuccess
+            if (aiReviewLoadingKey == key) aiReviewLoadingKey = null
+            val currentBook = ReadBook.book ?: return@onSuccess
+            val currentChapter = ReadBook.curTextChapter ?: return@onSuccess
+            if (
+                currentBook.bookUrl != book.bookUrl ||
+                currentChapter.chapter.index != chapterIndex ||
+                currentChapter.operitReviewContractHash != contentHash
+            ) {
+                consumePendingAiReviewRefresh()
+                return@onSuccess
+            }
+            if (result == null) {
+                activeAiReviewSummary = null
+                activeAiReviewKey = null
+                applyCombinedReviewProviders(chapterIndex)
+                consumePendingAiReviewRefresh()
+                return@onSuccess
+            }
+            activeAiReviewSummary = result
+            activeAiReviewKey = key
+            aiReviewAppliedKey = key
+            applyCombinedReviewProviders(chapterIndex)
+            consumePendingAiReviewRefresh()
+        }.onError {
+            if (requestGeneration != aiReviewRequestGeneration) return@onError
+            if (aiReviewLoadingKey == key) aiReviewLoadingKey = null
+            consumePendingAiReviewRefresh()
+        }
+    }
+
+    private fun consumePendingAiReviewRefresh() {
+        if (!aiReviewRefreshPending) return
+        aiReviewRefreshPending = false
+        aiReviewAppliedKey = null
+        handler.post { loadReviewSummaryIfNeeded() }
+    }
+
+    private fun applyCombinedReviewProviders(chapterIndex: Int) {
+        val nativeSummary = activeNativeReviewSummary
+        val aiSummary = activeAiReviewSummary
+        val signature = buildString {
+            append(chapterIndex)
+            append(':')
+            append(nativeSummary?.counts.hashCode())
+            append(':')
+            append(nativeSummary?.keys.hashCode())
+            append(':')
+            append(aiSummary?.counts.hashCode())
+            append(':')
+            append(aiSummary?.previews.hashCode())
+        }
+        if (combinedReviewSignature == signature) return
+        val hadAppliedProvider = combinedReviewSignature != null
+        combinedReviewSignature = signature
+        if (
+            nativeSummary?.counts.isNullOrEmpty() &&
+            aiSummary?.counts.isNullOrEmpty()
+        ) {
+            ChapterProvider.clearReviewProviders()
+            if (hadAppliedProvider) {
+                binding.readView.upContent(relativePosition = 0, resetPageOffset = false)
+            }
+            return
+        }
         ChapterProvider.setReviewProviders(
             countProvider = { targetChapterIndex, reviewId ->
-                if (targetChapterIndex == chapterIndex) result.counts[reviewId] ?: 0 else 0
+                if (targetChapterIndex != chapterIndex) {
+                    0
+                } else {
+                    (nativeSummary?.counts?.get(reviewId) ?: 0) +
+                        (aiSummary?.counts?.get(reviewId) ?: 0)
+                }
             },
             keyProvider = { targetChapterIndex, reviewId ->
-                if (targetChapterIndex == chapterIndex) result.keys[reviewId] else null
+                if (targetChapterIndex == chapterIndex) {
+                    nativeSummary?.keys?.get(reviewId)
+                } else {
+                    null
+                }
             },
             chapterIndex = chapterIndex,
+            previewProvider = { targetChapterIndex, reviewId ->
+                if (targetChapterIndex == chapterIndex) {
+                    aiSummary?.previews?.get(reviewId)
+                } else {
+                    null
+                }
+            },
         )
-        reviewSummaryAppliedKey = key
         binding.readView.upContent(relativePosition = 0, resetPageOffset = false)
+        scheduleAiReviewPreview()
+    }
+
+    private fun scheduleAiReviewPreview() {
+        aiReviewPreviewRunnable?.let(handler::removeCallbacks)
+        aiReviewPreviewView?.let { preview ->
+            (preview.parent as? ViewGroup)?.removeView(preview)
+        }
+        aiReviewPreviewView = null
+        aiReviewPreviewRunnable = Runnable {
+            if (isFinishing || isDestroyed || menuLayoutIsVisible) return@Runnable
+            val page = binding.readView.curPage.textPage
+            if (page.chapterIndex != ReadBook.durChapterIndex) return@Runnable
+            val candidate = page.lines
+                .asSequence()
+                .filter { it.isParagraphEnd && it.paragraphNum > 0 }
+                .mapNotNull { line ->
+                    val reviewId = line.paragraphNum - line.reviewTitleOffset
+                    if (reviewId <= 0) return@mapNotNull null
+                    val preview = ChapterProvider.getReviewPreview(
+                        reviewId,
+                        page.chapterIndex,
+                    ) ?: return@mapNotNull null
+                    val key = "${ReadBook.book?.bookUrl}|${page.chapterIndex}|$reviewId"
+                    if (key in shownAiReviewPreviews) return@mapNotNull null
+                    Triple(line, preview, key)
+                }
+                .firstOrNull()
+                ?: return@Runnable
+            val (line, preview, key) = candidate
+            val reviewId = line.paragraphNum - line.reviewTitleOffset
+            shownAiReviewPreviews.add(key)
+            showAiReviewPreview(
+                paragraphNum = reviewId,
+                chapterIndex = page.chapterIndex,
+                lineBottom = line.lineBottom,
+                text = preview,
+            )
+        }
+        handler.postDelayed(aiReviewPreviewRunnable!!, AI_REVIEW_PREVIEW_DELAY_MS)
+    }
+
+    private fun showAiReviewPreview(
+        paragraphNum: Int,
+        chapterIndex: Int,
+        lineBottom: Float,
+        text: String,
+    ) {
+        val root: FrameLayout = binding.root
+        aiReviewPreviewView?.let(root::removeView)
+        val backgroundColor = bottomBackground
+        val foregroundColor = getPrimaryTextColor(ColorUtils.isColorLight(backgroundColor))
+        val preview = TextView(this).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            textSize = 14f
+            setTextColor(foregroundColor)
+            this.text = "✨ ${text.trim()}"
+            setPadding(12.dpToPx(), 7.dpToPx(), 12.dpToPx(), 7.dpToPx())
+            background = GradientDrawable().apply {
+                setColor(ColorUtils.withAlpha(backgroundColor, 0.94f))
+                cornerRadius = 16.dpToPx().toFloat()
+                setStroke(1.dpToPx(), ColorUtils.withAlpha(foregroundColor, 0.18f))
+            }
+            alpha = 0f
+            setOnClickListener {
+                val count = (activeNativeReviewSummary?.counts?.get(paragraphNum) ?: 0) +
+                    (activeAiReviewSummary?.counts?.get(paragraphNum) ?: 0)
+                onReviewClick(paragraphNum, count, chapterIndex)
+            }
+        }
+        val maximumWidth = (root.width * 0.72f).toInt().coerceAtMost(360.dpToPx())
+        preview.maxWidth = maximumWidth
+        val top = (lineBottom + 4.dpToPx())
+            .toInt()
+            .coerceIn(12.dpToPx(), (root.height - 56.dpToPx()).coerceAtLeast(12.dpToPx()))
+        root.addView(
+            preview,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.END,
+            ).apply {
+                topMargin = top
+                marginEnd = 20.dpToPx()
+            },
+        )
+        aiReviewPreviewView = preview
+        preview.animate().alpha(1f).setDuration(160).start()
+        preview.postDelayed(
+            {
+                if (aiReviewPreviewView !== preview) return@postDelayed
+                preview.animate()
+                    .alpha(0f)
+                    .setDuration(220)
+                    .withEndAction {
+                        if (aiReviewPreviewView === preview) {
+                            root.removeView(preview)
+                            aiReviewPreviewView = null
+                        }
+                    }
+                    .start()
+            },
+            AI_REVIEW_PREVIEW_DURATION_MS,
+        )
     }
 
     private fun prefetchAdjacentReviewSummary(
@@ -2688,6 +2983,11 @@ class ReadBookActivity : BaseReadBookActivity(),
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(aiReviewRefreshRunnable)
+        if (registeredAiReviewRoots.isNotEmpty()) {
+            contentResolver.unregisterContentObserver(aiReviewContentObserver)
+            registeredAiReviewRoots.clear()
+        }
         super.onDestroy()
         tts?.clearTts()
         textActionMenu.dismiss()
@@ -2701,6 +3001,18 @@ class ReadBookActivity : BaseReadBookActivity(),
         }
         if (!BuildConfig.DEBUG) {
             Backup.autoBack(this)
+        }
+    }
+
+    private fun registerAiReviewObserver() {
+        OperitAiReviewClient.reviewRoots()
+            .filterNot(registeredAiReviewRoots::contains)
+            .forEach { uri ->
+            runCatching {
+                contentResolver.registerContentObserver(uri, true, aiReviewContentObserver)
+            }.onSuccess {
+                registeredAiReviewRoots.add(uri)
+            }
         }
     }
 
@@ -2844,6 +3156,9 @@ class ReadBookActivity : BaseReadBookActivity(),
         private const val ACTION_HIGHLIGHT_RULE_EDIT = "highlightRuleEdit"
         private const val ACTION_HIGHLIGHT_RULE_DISABLE = "highlightRuleDisable"
         private const val STATE_EDITING_HIGHLIGHT = "editingHighlight"
+        private const val AI_REVIEW_PREVIEW_DELAY_MS = 850L
+        private const val AI_REVIEW_PREVIEW_DURATION_MS = 3_600L
+        private const val AI_REVIEW_REFRESH_DEBOUNCE_MS = 180L
     }
 
 }

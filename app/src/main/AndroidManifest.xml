@@ -592,6 +592,9 @@
     </application>
 
     <queries>
+        <provider android:authorities="com.rainy.operitry.readingCompanionAnnotations" />
+        <provider android:authorities="com.rainy.operitry.dev.readingCompanionAnnotations" />
+        <provider android:authorities="com.rainy.operitry.clone.readingCompanionAnnotations" />
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="*" />

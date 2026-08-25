@@ -32,6 +32,7 @@ import com.bumptech.glide.request.RequestOptions
 import com.bumptech.glide.request.target.Target
 import com.google.android.flexbox.FlexboxLayout
 import io.legado.app.R
+import io.legado.app.api.OperitAiReviewClient
 import io.legado.app.base.BaseDialogFragment
 import io.legado.app.constant.AppLog
 import io.legado.app.base.adapter.ItemViewHolder
@@ -79,6 +80,8 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         bookUrl: String,
         sourceKey: String,
         ruleHash: Int,
+        aiAuthority: String? = null,
+        aiContentHash: String? = null,
     ) : this() {
         arguments = Bundle().apply {
             putInt(ARG_PARAGRAPH_NUM, paragraphNum)
@@ -88,6 +91,8 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
             putString(ARG_BOOK_URL, bookUrl)
             putString(ARG_SOURCE_KEY, sourceKey)
             putInt(ARG_RULE_HASH, ruleHash)
+            putString(ARG_AI_AUTHORITY, aiAuthority)
+            putString(ARG_AI_CONTENT_HASH, aiContentHash)
         }
     }
 
@@ -100,6 +105,8 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
     private var bookUrl: String = ""
     private var sourceKey: String = ""
     private var ruleHash: Int = 0
+    private var aiAuthority: String = ""
+    private var aiContentHash: String = ""
     private var isLoading = false
     private var hasMore = true
     private var currentPage = 1
@@ -210,6 +217,8 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         bookUrl = arguments?.getString(ARG_BOOK_URL).orEmpty()
         sourceKey = arguments?.getString(ARG_SOURCE_KEY).orEmpty()
         ruleHash = arguments?.getInt(ARG_RULE_HASH) ?: 0
+        aiAuthority = arguments?.getString(ARG_AI_AUTHORITY).orEmpty()
+        aiContentHash = arguments?.getString(ARG_AI_CONTENT_HASH).orEmpty()
         binding.root.setBackgroundResource(R.drawable.bg_dialog_round_top)
         binding.dragHandle.visible()
         binding.toolBar.setBackgroundResource(R.drawable.bg_review_toolbar)
@@ -440,13 +449,39 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         if (!hasMore) return
         isLoading = true
         Coroutine.async(lifecycleScope, IO, start = CoroutineStart.LAZY) {
-            val source = ReadBook.bookSource ?: return@async null
-            if (source.getKey() != sourceKey) return@async null
             val book = ReadBook.book ?: return@async null
             if (book.bookUrl != bookUrl) return@async null
-            val chapter = appDb.bookChapterDao.getChapter(book.bookUrl, chapterIndex) ?: return@async null
+            val aiItems = if (
+                page == 1 &&
+                aiAuthority.isNotBlank() &&
+                aiContentHash.isNotBlank()
+            ) {
+                OperitAiReviewClient.getDetail(
+                    authority = aiAuthority,
+                    bookId = bookUrl,
+                    chapterIndex = chapterIndex,
+                    paragraphIndex = paragraphNum,
+                    contentHash = aiContentHash,
+                )
+            } else {
+                emptyList()
+            }
+            fun aiOnlyResult() = aiItems.takeIf { it.isNotEmpty() }?.let {
+                ReviewResult(
+                    items = it,
+                    nextPageUrl = null,
+                    hasNextPageRule = false,
+                    hasReplyUrl = false,
+                    source = null,
+                )
+            }
+            if (sourceKey.isBlank()) return@async aiOnlyResult()
+            val source = ReadBook.bookSource ?: return@async aiOnlyResult()
+            if (source.getKey() != sourceKey) return@async aiOnlyResult()
+            val chapter = appDb.bookChapterDao.getChapter(book.bookUrl, chapterIndex)
+                ?: return@async aiOnlyResult()
             if (source.isJsSource()) {
-                if (source.mainJs.hashCode() != ruleHash) return@async null
+                if (source.mainJs.hashCode() != ruleHash) return@async aiOnlyResult()
                 val result = JsSourceReview.getReviewDetailAwait(
                     source = source,
                     book = book,
@@ -454,28 +489,31 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
                     paragraphIndex = paragraphNum,
                     paragraphData = paragraphData,
                     page = page,
-                ) ?: return@async null
+                ) ?: return@async aiOnlyResult()
                 return@async ReviewResult(
-                    items = result.items,
+                    items = aiItems + result.items,
                     nextPageUrl = result.nextPageUrl,
                     hasNextPageRule = true,
                     hasReplyUrl = JsSourceReview.hasReviewRepliesCapability(source),
                     source = source,
                 )
             }
-            val rule = source.ruleReview ?: return@async null
-            if (!rule.enabled || rule.hashCode() != ruleHash) return@async null
-            val firstPageUrlRule = rule.reviewDetailUrl?.takeIf { it.isNotBlank() } ?: return@async null
+            val rule = source.ruleReview ?: return@async aiOnlyResult()
+            if (!rule.enabled || rule.hashCode() != ruleHash) return@async aiOnlyResult()
+            val firstPageUrlRule = rule.reviewDetailUrl?.takeIf { it.isNotBlank() }
+                ?: return@async aiOnlyResult()
             val nextPageUrlRule = rule.reviewDetailNextPageUrl?.takeIf { it.isNotBlank() }
             val effectiveNextUrl = nextPageUrl?.takeIf { it.isNotBlank() }
-            if (page > 1 && effectiveNextUrl == null && nextPageUrlRule == null) return@async null
+            if (page > 1 && effectiveNextUrl == null && nextPageUrlRule == null) {
+                return@async aiOnlyResult()
+            }
             val detailUrlRule = when {
                 page > 1 && !effectiveNextUrl.isNullOrBlank() -> effectiveNextUrl
                 page > 1 -> nextPageUrlRule ?: firstPageUrlRule
                 else -> firstPageUrlRule
             }
             if (rule.detailListRule.isNullOrBlank() || rule.detailContentRule.isNullOrBlank()) {
-                return@async null
+                return@async aiOnlyResult()
             }
             val paraIndex = paragraphNum.toString()
             val paraData = paragraphData
@@ -508,7 +546,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
                 page = page.toString()
             )
             ReviewResult(
-                items = result.items,
+                items = aiItems + result.items,
                 nextPageUrl = result.nextPageUrl,
                 hasNextPageRule = nextPageUrlRule != null,
                 hasReplyUrl = !rule.reviewQuoteUrl.isNullOrBlank() &&
@@ -758,7 +796,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         val nextPageUrl: String?,
         val hasNextPageRule: Boolean,
         val hasReplyUrl: Boolean,
-        val source: BaseSource,
+        val source: BaseSource?,
     )
 
     private data class ReplyResult(
@@ -868,6 +906,8 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         const val ARG_BOOK_URL = "bookUrl"
         const val ARG_SOURCE_KEY = "sourceKey"
         const val ARG_RULE_HASH = "ruleHash"
+        const val ARG_AI_AUTHORITY = "aiAuthority"
+        const val ARG_AI_CONTENT_HASH = "aiContentHash"
         const val TYPE_NORMAL = 0
         const val TYPE_MORE = 1
         const val PAYLOAD_AUDIO_STATE = "review_audio_state"

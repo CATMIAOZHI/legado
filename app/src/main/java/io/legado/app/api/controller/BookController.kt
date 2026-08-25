@@ -5,6 +5,7 @@ import android.graphics.drawable.Drawable
 import androidx.core.graphics.drawable.toBitmap
 import com.bumptech.glide.Glide
 import io.legado.app.api.ReturnData
+import io.legado.app.api.OperitReviewParagraphContractSupport
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookProgress
@@ -12,6 +13,7 @@ import io.legado.app.data.entities.BookSource
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.CacheManager
 import io.legado.app.help.book.BookHelp
+import io.legado.app.help.book.BookContent
 import io.legado.app.help.book.ContentProcessor
 import io.legado.app.help.book.isLocal
 import io.legado.app.help.book.update
@@ -89,6 +91,20 @@ object BookController {
         val readableUntil: Int,
         val isComplete: Boolean,
         val readingChapterIndex: Int,
+        val capturedAt: Long,
+    )
+
+    private data class AnnotationParagraphData(
+        val reviewId: Int,
+        val text: String,
+    )
+
+    private data class AnnotationChapterData(
+        val bookUrl: String,
+        val chapterIndex: Int,
+        val chapterTitle: String?,
+        val contractHash: String,
+        val paragraphs: List<AnnotationParagraphData>,
         val capturedAt: Long,
     )
 
@@ -256,30 +272,62 @@ object BookController {
         if (book == null || chapter == null) {
             return returnData.setErrorMsg("未找到")
         }
-        var content: String? = BookHelp.getContent(book, chapter)
-        if (content != null) {
-            val contentProcessor = ContentProcessor.get(book.name, book.origin)
-            content = runBlocking {
-                contentProcessor.getContent(book, chapter, content, includeTitle = false)
-                    .toString()
-            }
-            return returnData.setData(content)
-        }
-        val bookSource = appDb.bookSourceDao.getBookSource(book.origin)
-            ?: return returnData.setErrorMsg("未找到书源")
-        try {
-            content = runBlocking {
-                WebBook.getContentAwait(bookSource, book, chapter).let {
-                    val contentProcessor = ContentProcessor.get(book.name, book.origin)
-                    contentProcessor.getContent(book, chapter, it, includeTitle = false)
-                        .toString()
-                }
-            }
-            returnData.setData(content)
+        return try {
+            val content = runBlocking { loadProcessedBookContent(book, chapter) }
+            returnData.setData(content.toString())
         } catch (e: Exception) {
             returnData.setErrorMsg(e.stackTraceStr)
         }
-        return returnData
+    }
+
+    /**
+     * Returns the explicit paragraph contract used by Operit's isolated next-chapter generator.
+     * Unsupported special-layout chapters fail closed instead of exposing mismatched review IDs.
+     */
+    fun getAnnotationBookContent(parameters: Map<String, List<String>>): ReturnData {
+        val bookUrl = parameters["url"]?.firstOrNull()
+            ?: return ReturnData().setErrorMsg("参数url不能为空，请指定书籍地址")
+        val chapterIndex = parameters["index"]?.firstOrNull()?.toIntOrNull()
+            ?: return ReturnData().setErrorMsg("参数index不能为空, 请指定目录序号")
+        val book = appDb.bookDao.getBook(bookUrl)
+            ?: return ReturnData().setErrorMsg("未找到书籍")
+        val chapter = runBlocking {
+            var value = appDb.bookChapterDao.getChapter(bookUrl, chapterIndex)
+            var wait = 0
+            while (value == null && wait < 30) {
+                delay(1000)
+                value = appDb.bookChapterDao.getChapter(bookUrl, chapterIndex)
+                wait++
+            }
+            value
+        } ?: return ReturnData().setErrorMsg("未找到章节")
+        return try {
+            val content = runBlocking { loadProcessedBookContent(book, chapter) }
+            val contract = OperitReviewParagraphContractSupport.fromTextList(content.textList)
+                ?: return ReturnData().setErrorMsg("该章节使用特殊排版，暂不生成 AI 段评")
+            val chapterTitle = chapter.getDisplayTitle(
+                ContentProcessor.get(book.name, book.origin).getTitleReplaceRules(),
+                book.getUseReplaceRule(),
+                replaceBook = book.toReplaceBook(),
+            )
+            ReturnData().setData(
+                AnnotationChapterData(
+                    bookUrl = bookUrl,
+                    chapterIndex = chapterIndex,
+                    chapterTitle = chapterTitle,
+                    contractHash = contract.hash,
+                    paragraphs = contract.paragraphs.map { paragraph ->
+                        AnnotationParagraphData(
+                            reviewId = paragraph.id,
+                            text = paragraph.text,
+                        )
+                    },
+                    capturedAt = System.currentTimeMillis(),
+                )
+            )
+        } catch (error: Exception) {
+            ReturnData().setErrorMsg(error.stackTraceStr)
+        }
     }
 
     /**
@@ -429,6 +477,19 @@ object BookController {
             bodyContent = resolvedBodyContent,
             capturedAt = System.currentTimeMillis(),
         )
+    }
+
+    private suspend fun loadProcessedBookContent(
+        book: Book,
+        chapter: io.legado.app.data.entities.BookChapter,
+    ): BookContent {
+        val rawContent = BookHelp.getContent(book, chapter) ?: run {
+            val bookSource = appDb.bookSourceDao.getBookSource(book.origin)
+                ?: error("未找到书源")
+            WebBook.getContentAwait(bookSource, book, chapter)
+        }
+        return ContentProcessor.get(book.name, book.origin)
+            .getContent(book, chapter, rawContent, includeTitle = false)
     }
 
     /**

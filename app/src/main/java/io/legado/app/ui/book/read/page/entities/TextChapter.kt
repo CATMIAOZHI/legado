@@ -53,6 +53,7 @@ data class TextChapter(
     @Transient
     @Volatile
     var bodyContent: String = ""
+    var operitReviewContractHash: String? = null
 
     val layoutChannel get() = layout!!.channel
 

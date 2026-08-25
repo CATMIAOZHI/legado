@@ -30,6 +30,7 @@ class ReaderProviderRoutesTest {
             "book/cover/query" to ReaderProviderRequestCode.GetBookCover,
             "reading/snapshot/query" to ReaderProviderRequestCode.GetReadingSnapshot,
             "book/readableContent/query" to ReaderProviderRequestCode.GetReadableBookContent,
+            "book/annotationContent/query" to ReaderProviderRequestCode.GetAnnotationBookContent,
         )
 
         assertEquals(expected, ReaderProviderRoutes.all.associate { it.path to it.requestCode })
@@ -171,8 +172,17 @@ class ReaderProviderRoutesTest {
                 "content"
             },
         )
+        val annotationContent = dispatchReaderProviderQuery(
+            ReaderProviderRequestCode.GetAnnotationBookContent,
+            parameters,
+            getAnnotationBookContent = {
+                assertEquals(parameters, it)
+                "annotation-content"
+            },
+        )
 
         assertEquals("snapshot", snapshot)
         assertEquals("content", readableContent)
+        assertEquals("annotation-content", annotationContent)
     }
 }

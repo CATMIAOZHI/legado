@@ -7,25 +7,18 @@ import java.io.File
 class NativeReviewProviderSourceTest {
 
     @Test
-    fun `summary providers stay scoped to their chapter`() {
+    fun `native and AI summary providers stay scoped to their chapter`() {
         val source = projectFile(
             "src/main/java/io/legado/app/ui/book/read/ReadBookActivity.kt"
         ).readText().normalizeLines()
-        val applyBlock = source.substringAfter("private fun applyReviewSummary(")
+        val applyBlock = source.substringAfter("private fun applyCombinedReviewProviders(")
             .substringBefore("private fun prefetchAdjacentReviewSummary(")
 
-        assertTrue(
-            Regex(
-                """if\s*\(targetChapterIndex == chapterIndex\)\s*""" +
-                    """result\.counts\[reviewId]\s*\?:\s*0\s*else\s*0"""
-            ).containsMatchIn(applyBlock)
-        )
-        assertTrue(
-            Regex(
-                """if\s*\(targetChapterIndex == chapterIndex\)\s*""" +
-                    """result\.keys\[reviewId]\s*else\s*null"""
-            ).containsMatchIn(applyBlock)
-        )
+        assertTrue(applyBlock.contains("if (targetChapterIndex != chapterIndex)"))
+        assertTrue(applyBlock.contains("(nativeSummary?.counts?.get(reviewId) ?: 0) +"))
+        assertTrue(applyBlock.contains("(aiSummary?.counts?.get(reviewId) ?: 0)"))
+        assertTrue(applyBlock.contains("nativeSummary?.keys?.get(reviewId)"))
+        assertTrue(applyBlock.contains("aiSummary?.previews?.get(reviewId)"))
     }
 
     @Test
