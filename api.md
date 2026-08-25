@@ -360,6 +360,29 @@ URL = content://providerHost/book/content/query?url=xxx&index=1
 Method = query
 ```
 
+#### 获取安全阅读快照
+
+返回最近阅读书籍（或 `url` 指定书籍）的当前章节与阅读位置。`bodyPosition`
+是相对于处理后正文的安全位置；只有实时排版或已持久化的安全快照可验证时才会返回，
+否则为 `null`，调用方必须按不可读取当前章处理。
+
+```
+URL = content://providerHost/reading/snapshot/query
+URL = content://providerHost/reading/snapshot/query?url=xxx
+Method = query
+```
+
+#### 获取已读范围内的正文
+
+只读接口。已完成章节返回完整正文，当前章节只返回到安全 `bodyPosition` 的前缀，
+未读章节会在加载正文前被拒绝。如果当前章节的安全位置不可验证，也会拒绝返回，
+调用方不得回退到 `book/content/query`。
+
+```
+URL = content://providerHost/book/readableContent/query?url=xxx&index=1
+Method = query
+```
+
 #### 获取封面
 
 ```

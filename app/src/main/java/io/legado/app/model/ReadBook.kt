@@ -63,6 +63,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import splitties.init.appCtx
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
 import kotlin.math.min
 
@@ -104,6 +105,13 @@ internal fun resolveReplacePreviewPosition(
 @Suppress("MemberVisibilityCanBePrivate")
 object ReadBook : CoroutineScope by MainScope() {
 
+    internal data class LiveReadableBoundary(
+        val bookUrl: String,
+        val chapterIndex: Int,
+        val layoutPosition: Int,
+        val safeSnapshot: PersistedReadableSnapshot?,
+    )
+
     data class ReplacePreview(
         val sourceChapter: TextChapter,
         val previewChapter: TextChapter,
@@ -115,6 +123,10 @@ object ReadBook : CoroutineScope by MainScope() {
     )
 
     var book: Book? = null
+    private val readableSnapshotPersistenceLock = Any()
+    private val liveReadableBoundaryRef = AtomicReference<LiveReadableBoundary?>(null)
+    internal val liveReadableBoundary: LiveReadableBoundary?
+        get() = liveReadableBoundaryRef.get()
     var callBack: CallBack? = null
     var highlights: List<BookHighlight> = emptyList()
         private set
@@ -128,7 +140,15 @@ object ReadBook : CoroutineScope by MainScope() {
     var chapterSize = 0
     var simulatedChapterSize = 0
     var durChapterIndex = 0
+        set(value) {
+            field = value
+            publishReadableBoundaryUnavailable()
+        }
     var durChapterPos = 0
+        set(value) {
+            field = value
+            publishReadableBoundaryUnavailable()
+        }
     var isLocalBook = true
     var chapterChanged = false
     var prevTextChapter: TextChapter? = null
@@ -160,9 +180,49 @@ object ReadBook : CoroutineScope by MainScope() {
     val preDownloadSemaphore = Semaphore(2)
     val executor = globalExecutor
 
+    /**
+     * Every visible progress mutation revokes the previous safe prefix immediately. saveRead()
+     * republishes an exact prefix when the current layout can prove the body/title boundary.
+     */
+    private fun publishReadableBoundaryUnavailable() {
+        val activeBook = book ?: return
+        liveReadableBoundaryRef.set(
+            LiveReadableBoundary(
+                bookUrl = activeBook.bookUrl,
+                chapterIndex = durChapterIndex,
+                layoutPosition = durChapterPos,
+                safeSnapshot = null,
+            )
+        )
+        synchronized(readableSnapshotPersistenceLock) {
+            ReadableSnapshotStore.invalidate(activeBook.bookUrl)
+        }
+    }
+
+    private fun publishReadableBoundaryUnavailable(book: Book) {
+        liveReadableBoundaryRef.set(
+            LiveReadableBoundary(
+                bookUrl = book.bookUrl,
+                chapterIndex = book.durChapterIndex,
+                layoutPosition = book.durChapterPos,
+                safeSnapshot = null,
+            )
+        )
+    }
+
+    private fun currentReadableBoundaryFor(book: Book): LiveReadableBoundary? {
+        val boundary = liveReadableBoundaryRef.get() ?: return null
+        return boundary.takeIf {
+            it.bookUrl == book.bookUrl &&
+                it.chapterIndex == durChapterIndex &&
+                it.layoutPosition == durChapterPos
+        }
+    }
+
     fun resetData(book: Book) {
         val positionAnchor = pendingHighlightAnchor
         releaseAndCancel()
+        publishReadableBoundaryUnavailable(book)
         ReadBook.book = book
         loadHighlights(book)
         loadHighlightRules(book)
@@ -862,9 +922,9 @@ object ReadBook : CoroutineScope by MainScope() {
                     )
                 }
             }
-            if (pendingHighlightJump == null) {
-                saveRead()
-            }
+            // A pending title-length conversion cannot expose a safe body position yet, but the
+            // new (possibly backward) chapter/layout boundary must become visible immediately.
+            saveRead()
             loadContent(resetPageOffset = true) {
                 success?.invoke()
             }
@@ -1501,18 +1561,43 @@ object ReadBook : CoroutineScope by MainScope() {
     }
 
     fun saveRead(pageChanged: Boolean = false) {
-        if (hasPendingHighlightJump()) return
+        if (hasPendingHighlightJump()) {
+            publishReadableBoundaryUnavailable()
+            return
+        }
         val book = book ?: return
+        val expectedBoundary = currentReadableBoundaryFor(book) ?: run {
+            publishReadableBoundaryUnavailable()
+            return
+        }
+        val chapterIndex = expectedBoundary.chapterIndex
+        val layoutPosition = expectedBoundary.layoutPosition
+        val readableSnapshot = curTextChapter?.takeIf {
+            it.isForBook(book) && it.chapter.index == chapterIndex
+        }?.let { chapter ->
+            createReadableSnapshot(
+                bookUrl = book.bookUrl,
+                chapterIndex = chapterIndex,
+                layoutPosition = layoutPosition,
+                layoutTitleLength = chapter.layoutTitleLength,
+                bodyContent = chapter.bodyContent,
+            )
+        }
+        val publishedBoundary = expectedBoundary.copy(
+            safeSnapshot = readableSnapshot,
+        )
+        if (!liveReadableBoundaryRef.compareAndSet(expectedBoundary, publishedBoundary)) return
         executor.execute {
+            if (liveReadableBoundaryRef.get() !== publishedBoundary) return@execute
             kotlin.runCatching {
                 book.lastCheckCount = 0
                 val durTime = System.currentTimeMillis()
                 book.durChapterTime = durTime
-                val chapterChanged = book.durChapterIndex != durChapterIndex
-                book.durChapterIndex = durChapterIndex
-                book.durChapterPos = durChapterPos
+                val chapterChanged = book.durChapterIndex != chapterIndex
+                book.durChapterIndex = chapterIndex
+                book.durChapterPos = layoutPosition
                 if (!pageChanged || chapterChanged) {
-                    appDb.bookChapterDao.getChapter(book.bookUrl, durChapterIndex)?.let {
+                    appDb.bookChapterDao.getChapter(book.bookUrl, chapterIndex)?.let {
                         book.durChapterTitle = it.getDisplayTitle(
                             ContentProcessor.get(book.name, book.origin).getTitleReplaceRules(),
                             book.getUseReplaceRule(),
@@ -1521,7 +1606,26 @@ object ReadBook : CoroutineScope by MainScope() {
                         SourceCallBack.callBackBook(SourceCallBack.SAVE_READ, bookSource, book, it, durTime.toString())
                     }
                 }
-                book.update()
+                synchronized(readableSnapshotPersistenceLock) {
+                    if (liveReadableBoundaryRef.get() !== publishedBoundary) {
+                        return@synchronized
+                    }
+                    book.update()
+                    if (liveReadableBoundaryRef.get() !== publishedBoundary) {
+                        ReadableSnapshotStore.invalidate(book.bookUrl)
+                        return@synchronized
+                    }
+                    readableSnapshot?.let { snapshot ->
+                        kotlin.runCatching {
+                            ReadableSnapshotStore.save(snapshot)
+                            if (liveReadableBoundaryRef.get() !== publishedBoundary) {
+                                ReadableSnapshotStore.invalidate(book.bookUrl)
+                            }
+                        }.onFailure {
+                            AppLog.put("保存 AI 伴读安全快照出错\n$it", it)
+                        }
+                    }
+                }
             }.onFailure {
                 AppLog.put("保存书籍阅读进度信息出错\n$it", it)
             }

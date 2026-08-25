@@ -18,6 +18,8 @@ internal enum class ReaderProviderRequestCode {
     GetBookContent,
     GetBookCover,
     SaveBookProgress,
+    GetReadingSnapshot,
+    GetReadableBookContent,
 }
 
 internal data class ReaderProviderRoute(
@@ -44,6 +46,14 @@ internal object ReaderProviderRoutes {
         ReaderProviderRoute("book/chapter/query", ReaderProviderRequestCode.GetChapterList),
         ReaderProviderRoute("book/content/query", ReaderProviderRequestCode.GetBookContent),
         ReaderProviderRoute("book/cover/query", ReaderProviderRequestCode.GetBookCover),
+        ReaderProviderRoute(
+            "reading/snapshot/query",
+            ReaderProviderRequestCode.GetReadingSnapshot,
+        ),
+        ReaderProviderRoute(
+            "book/readableContent/query",
+            ReaderProviderRequestCode.GetReadableBookContent,
+        ),
     )
 
     private val requestByPath = all.associate { it.path to it.requestCode }
@@ -111,6 +121,12 @@ internal fun <T> dispatchReaderProviderQuery(
     getBookContent: (Map<String, List<String>>) -> T = {
         unexpectedReaderProviderRequest(requestCode)
     },
+    getReadingSnapshot: (Map<String, List<String>>) -> T = {
+        unexpectedReaderProviderRequest(requestCode)
+    },
+    getReadableBookContent: (Map<String, List<String>>) -> T = {
+        unexpectedReaderProviderRequest(requestCode)
+    },
     refreshToc: (Map<String, List<String>>) -> T = {
         unexpectedReaderProviderRequest(requestCode)
     },
@@ -128,6 +144,8 @@ internal fun <T> dispatchReaderProviderQuery(
         ReaderProviderRequestCode.GetRssSources -> getRssSources()
         ReaderProviderRequestCode.GetBookshelf -> getBookshelf()
         ReaderProviderRequestCode.GetBookContent -> getBookContent(parameters)
+        ReaderProviderRequestCode.GetReadingSnapshot -> getReadingSnapshot(parameters)
+        ReaderProviderRequestCode.GetReadableBookContent -> getReadableBookContent(parameters)
         ReaderProviderRequestCode.RefreshToc -> refreshToc(parameters)
         ReaderProviderRequestCode.GetChapterList -> getChapterList(parameters)
         ReaderProviderRequestCode.GetBookCover -> getBookCover(parameters)

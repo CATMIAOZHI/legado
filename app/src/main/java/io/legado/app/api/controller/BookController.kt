@@ -20,6 +20,7 @@ import io.legado.app.help.glide.ImageLoader
 import io.legado.app.model.BookCover
 import io.legado.app.model.ImageProvider
 import io.legado.app.model.ReadBook
+import io.legado.app.model.ReadableSnapshotStore
 import io.legado.app.model.localBook.LocalBook
 import io.legado.app.model.webBook.WebBook
 import io.legado.app.utils.GSON
@@ -53,6 +54,42 @@ object BookController {
         val bookUrl: String,
         val book: Book,
         val bookSource: BookSource?,
+    )
+
+    private data class ReadingBoundarySnapshot(
+        val bookUrl: String,
+        val chapterIndex: Int,
+        val chapterTitle: String?,
+        val layoutPosition: Int,
+        val layoutTitleLength: Int?,
+        val bodyPosition: Int?,
+        val bodyContent: String?,
+        val capturedAt: Long,
+    )
+
+    private data class ReadingSnapshotData(
+        val bookUrl: String,
+        val name: String,
+        val author: String,
+        val totalChapterNum: Int,
+        val currentChapterIndex: Int,
+        val currentChapterTitle: String?,
+        val layoutPosition: Int,
+        val bodyPosition: Int?,
+        val preciseBodyPositionAvailable: Boolean,
+        val lastReadAt: Long,
+        val capturedAt: Long,
+    )
+
+    private data class ReadableChapterData(
+        val bookUrl: String,
+        val chapterIndex: Int,
+        val chapterTitle: String?,
+        val content: String,
+        val readableUntil: Int,
+        val isComplete: Boolean,
+        val readingChapterIndex: Int,
+        val capturedAt: Long,
     )
 
     @Volatile
@@ -243,6 +280,155 @@ object BookController {
             returnData.setErrorMsg(e.stackTraceStr)
         }
         return returnData
+    }
+
+    /**
+     * Returns the most recently read book and a body-only reading position when the active
+     * chapter layout is still available. The body position is intentionally nullable: callers
+     * must not derive it from durChapterPos because that value includes the rendered title.
+     */
+    fun getReadingSnapshot(parameters: Map<String, List<String>>): ReturnData {
+        val requestedBookUrl = parameters["url"]?.firstOrNull()?.takeIf { it.isNotBlank() }
+        val book = if (requestedBookUrl != null) {
+            appDb.bookDao.getBook(requestedBookUrl)
+                ?: return ReturnData().setErrorMsg("未找到指定书籍")
+        } else {
+            ReadBook.liveReadableBoundary?.let { live ->
+                appDb.bookDao.getBook(live.bookUrl)
+            } ?: appDb.bookDao.all.maxByOrNull { it.durChapterTime }
+                ?: return ReturnData().setErrorMsg("没有最近阅读书籍")
+        }
+        val boundary = captureReadingBoundary(book)
+        return ReturnData().setData(
+            ReadingSnapshotData(
+                bookUrl = book.bookUrl,
+                name = book.name,
+                author = book.author,
+                totalChapterNum = book.totalChapterNum,
+                currentChapterIndex = boundary.chapterIndex,
+                currentChapterTitle = boundary.chapterTitle,
+                layoutPosition = boundary.layoutPosition,
+                bodyPosition = boundary.bodyPosition,
+                preciseBodyPositionAvailable = boundary.bodyPosition != null,
+                lastReadAt = book.durChapterTime,
+                capturedAt = boundary.capturedAt,
+            )
+        )
+    }
+
+    /**
+     * Returns only content that is readable under the latest Legado reading boundary.
+     *
+     * Completed chapters are returned in full. The current chapter is returned only when its
+     * active layout exposes a trustworthy title length, and is truncated before leaving Legado.
+     * Future chapters are rejected before content loading. The boundary is captured again after
+     * loading so a concurrent backward progress change also fails closed.
+     */
+    fun getReadableBookContent(parameters: Map<String, List<String>>): ReturnData {
+        val bookUrl = parameters["url"]?.firstOrNull()
+            ?: return ReturnData().setErrorMsg("参数url不能为空，请指定书籍地址")
+        val chapterIndex = parameters["index"]?.firstOrNull()?.toIntOrNull()
+            ?: return ReturnData().setErrorMsg("参数index不能为空, 请指定目录序号")
+        val book = appDb.bookDao.getBook(bookUrl)
+            ?: return ReturnData().setErrorMsg("未找到书籍")
+        val initialBoundary = captureReadingBoundary(book)
+        if (chapterIndex > initialBoundary.chapterIndex) {
+            return ReturnData().setErrorMsg("拒绝读取未读章节")
+        }
+        if (chapterIndex == initialBoundary.chapterIndex && initialBoundary.bodyPosition == null) {
+            return ReturnData().setErrorMsg("当前章节的安全正文位置暂不可用")
+        }
+
+        val initiallyCurrent = chapterIndex == initialBoundary.chapterIndex
+        val initialContent = if (initiallyCurrent) {
+            initialBoundary.bodyContent
+                ?: return ReturnData().setErrorMsg("当前章节的安全正文暂不可用")
+        } else {
+            val contentResult = getBookContent(parameters)
+            if (!contentResult.isSuccess) return contentResult
+            contentResult.data as? String
+                ?: return ReturnData().setErrorMsg("章节正文格式错误")
+        }
+
+        val latestBook = appDb.bookDao.getBook(bookUrl)
+            ?: return ReturnData().setErrorMsg("未找到书籍")
+        val latestBoundary = captureReadingBoundary(latestBook)
+        if (chapterIndex > latestBoundary.chapterIndex) {
+            return ReturnData().setErrorMsg("阅读进度已后退，拒绝返回该章节")
+        }
+
+        val (safeContent, readableUntil) = when {
+            chapterIndex == latestBoundary.chapterIndex -> {
+                val latestContent = latestBoundary.bodyContent
+                    ?: return ReturnData().setErrorMsg("当前章节的安全正文暂不可用")
+                val latestPosition = latestBoundary.bodyPosition
+                    ?.coerceIn(0, latestContent.length)
+                    ?: return ReturnData().setErrorMsg("当前章节的安全正文位置暂不可用")
+                latestContent to latestPosition
+            }
+            initiallyCurrent -> {
+                val initialPosition = initialBoundary.bodyPosition
+                    ?.coerceIn(0, initialContent.length)
+                    ?: return ReturnData().setErrorMsg("当前章节的安全正文位置暂不可用")
+                initialContent to initialPosition
+            }
+            else -> initialContent to initialContent.length
+        }
+        val chapterTitle = appDb.bookChapterDao.getChapter(bookUrl, chapterIndex)?.getDisplayTitle(
+            ContentProcessor.get(latestBook.name, latestBook.origin).getTitleReplaceRules(),
+            latestBook.getUseReplaceRule(),
+            replaceBook = latestBook.toReplaceBook(),
+        )
+        return ReturnData().setData(
+            ReadableChapterData(
+                bookUrl = bookUrl,
+                chapterIndex = chapterIndex,
+                chapterTitle = chapterTitle,
+                content = safeContent.take(readableUntil),
+                readableUntil = readableUntil,
+                isComplete = chapterIndex < latestBoundary.chapterIndex,
+                readingChapterIndex = latestBoundary.chapterIndex,
+                capturedAt = latestBoundary.capturedAt,
+            )
+        )
+    }
+
+    private fun captureReadingBoundary(book: Book): ReadingBoundarySnapshot {
+        /*
+         * saveRead publishes this immutable object synchronously before its database write is
+         * queued. A Binder query therefore sees an immediate backward seek and never combines
+         * independently mutable ReadBook fields. Persisted data is only the process-death fallback.
+         */
+        val liveBoundary = ReadBook.liveReadableBoundary?.takeIf {
+            it.bookUrl == book.bookUrl
+        }
+        val chapterIndex = liveBoundary?.chapterIndex ?: book.durChapterIndex
+        val layoutPosition = liveBoundary?.layoutPosition ?: book.durChapterPos
+        val readableSnapshot = if (liveBoundary != null) {
+            liveBoundary.safeSnapshot?.takeIf {
+                it.chapterIndex == chapterIndex &&
+                    it.layoutPosition == layoutPosition
+            }
+        } else {
+            ReadableSnapshotStore.load(book.bookUrl)?.takeIf {
+                it.chapterIndex == chapterIndex &&
+                    it.layoutPosition == layoutPosition
+            }
+        }
+        val resolvedBodyPosition = readableSnapshot?.bodyPosition
+        val resolvedBodyContent = readableSnapshot?.content
+        val chapterTitle = appDb.bookChapterDao.getChapter(book.bookUrl, chapterIndex)?.title
+            ?: if (chapterIndex == book.durChapterIndex) book.durChapterTitle else null
+        return ReadingBoundarySnapshot(
+            bookUrl = book.bookUrl,
+            chapterIndex = chapterIndex,
+            chapterTitle = chapterTitle,
+            layoutPosition = layoutPosition,
+            layoutTitleLength = readableSnapshot?.let { layoutPosition - it.bodyPosition },
+            bodyPosition = resolvedBodyPosition,
+            bodyContent = resolvedBodyContent,
+            capturedAt = System.currentTimeMillis(),
+        )
     }
 
     /**

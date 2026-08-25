@@ -46,6 +46,14 @@ data class TextChapter(
     @Volatile
     var layoutTitleLength: Int = UNKNOWN_LAYOUT_TITLE_LENGTH
 
+    /**
+     * The exact body-only text used to build this layout. Keeping it beside the layout lets
+     * read-only integrations convert chapterPosition without re-running mutable replacement rules.
+     */
+    @Transient
+    @Volatile
+    var bodyContent: String = ""
+
     val layoutChannel get() = layout!!.channel
 
     fun getPage(index: Int): TextPage? {

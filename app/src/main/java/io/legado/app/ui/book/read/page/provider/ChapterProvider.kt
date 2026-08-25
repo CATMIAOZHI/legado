@@ -254,6 +254,7 @@ object ChapterProvider {
             hasBodyContent = bookContent.textList.isNotEmpty(),
             isTransient = !saveChapterData,
         ).apply {
+            bodyContent = bookContent.toString()
             createLayout(scope, book, bookContent, saveChapterData)
         }
 

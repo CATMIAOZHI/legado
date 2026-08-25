@@ -28,6 +28,8 @@ class ReaderProviderRoutesTest {
             "book/chapter/query" to ReaderProviderRequestCode.GetChapterList,
             "book/content/query" to ReaderProviderRequestCode.GetBookContent,
             "book/cover/query" to ReaderProviderRequestCode.GetBookCover,
+            "reading/snapshot/query" to ReaderProviderRequestCode.GetReadingSnapshot,
+            "book/readableContent/query" to ReaderProviderRequestCode.GetReadableBookContent,
         )
 
         assertEquals(expected, ReaderProviderRoutes.all.associate { it.path to it.requestCode })
@@ -147,5 +149,30 @@ class ReaderProviderRoutesTest {
 
         assertEquals("single-rss", source)
         assertEquals("multiple-rss", sources)
+    }
+
+    @Test
+    fun `reading queries dispatch only to safe reading handlers`() {
+        val parameters = mapOf("url" to listOf("book-url"))
+
+        val snapshot = dispatchReaderProviderQuery(
+            ReaderProviderRequestCode.GetReadingSnapshot,
+            parameters,
+            getReadingSnapshot = {
+                assertEquals(parameters, it)
+                "snapshot"
+            },
+        )
+        val readableContent = dispatchReaderProviderQuery(
+            ReaderProviderRequestCode.GetReadableBookContent,
+            parameters,
+            getReadableBookContent = {
+                assertEquals(parameters, it)
+                "content"
+            },
+        )
+
+        assertEquals("snapshot", snapshot)
+        assertEquals("content", readableContent)
     }
 }

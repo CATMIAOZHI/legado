@@ -37,7 +37,7 @@ class ReaderProvider : ContentProvider() {
         context?.let { context ->
             ShortCuts.buildShortCuts(context)
         }
-        return false
+        return true
     }
 
     override fun delete(
@@ -100,6 +100,8 @@ class ReaderProvider : ContentProvider() {
                 getRssSources = { RssSourceController.sources },
                 getBookshelf = { BookController.bookshelf },
                 getBookContent = { BookController.getBookContent(it) },
+                getReadingSnapshot = { BookController.getReadingSnapshot(it) },
+                getReadableBookContent = { BookController.getReadableBookContent(it) },
                 refreshToc = { BookController.refreshToc(it) },
                 getChapterList = { BookController.getChapterList(it) },
                 getBookCover = { BookController.getCover(it) },
