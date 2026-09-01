@@ -85,6 +85,7 @@ object BookController {
 
     private data class ReadableChapterData(
         val bookUrl: String,
+        val chapterUrl: String,
         val chapterIndex: Int,
         val chapterTitle: String?,
         val content: String,
@@ -101,6 +102,7 @@ object BookController {
 
     private data class AnnotationChapterData(
         val bookUrl: String,
+        val chapterUrl: String,
         val chapterIndex: Int,
         val chapterTitle: String?,
         val contractHash: String,
@@ -313,6 +315,7 @@ object BookController {
             ReturnData().setData(
                 AnnotationChapterData(
                     bookUrl = bookUrl,
+                    chapterUrl = chapter.url,
                     chapterIndex = chapterIndex,
                     chapterTitle = chapterTitle,
                     contractHash = contract.hash,
@@ -379,7 +382,14 @@ object BookController {
             ?: return ReturnData().setErrorMsg("参数index不能为空, 请指定目录序号")
         val book = appDb.bookDao.getBook(bookUrl)
             ?: return ReturnData().setErrorMsg("未找到书籍")
+        val sourceChapter = appDb.bookChapterDao.getChapter(bookUrl, chapterIndex)
+            ?: return ReturnData().setErrorMsg("未找到章节")
         val initialBoundary = captureReadingBoundary(book)
+        if (
+            appDb.bookChapterDao.getChapter(bookUrl, chapterIndex)?.url != sourceChapter.url
+        ) {
+            return ReturnData().setErrorMsg("目录已更新，请重试读取章节")
+        }
         if (chapterIndex > initialBoundary.chapterIndex) {
             return ReturnData().setErrorMsg("拒绝读取未读章节")
         }
@@ -392,10 +402,11 @@ object BookController {
             initialBoundary.bodyContent
                 ?: return ReturnData().setErrorMsg("当前章节的安全正文暂不可用")
         } else {
-            val contentResult = getBookContent(parameters)
-            if (!contentResult.isSuccess) return contentResult
-            contentResult.data as? String
-                ?: return ReturnData().setErrorMsg("章节正文格式错误")
+            try {
+                runBlocking { loadProcessedBookContent(book, sourceChapter) }.toString()
+            } catch (error: Exception) {
+                return ReturnData().setErrorMsg(error.stackTraceStr)
+            }
         }
 
         val latestBook = appDb.bookDao.getBook(bookUrl)
@@ -422,7 +433,12 @@ object BookController {
             }
             else -> initialContent to initialContent.length
         }
-        val chapterTitle = appDb.bookChapterDao.getChapter(bookUrl, chapterIndex)?.getDisplayTitle(
+        val latestChapter = appDb.bookChapterDao.getChapter(bookUrl, chapterIndex)
+            ?: return ReturnData().setErrorMsg("未找到章节")
+        if (latestChapter.url != sourceChapter.url) {
+            return ReturnData().setErrorMsg("目录已更新，请重试读取章节")
+        }
+        val chapterTitle = sourceChapter.getDisplayTitle(
             ContentProcessor.get(latestBook.name, latestBook.origin).getTitleReplaceRules(),
             latestBook.getUseReplaceRule(),
             replaceBook = latestBook.toReplaceBook(),
@@ -430,6 +446,7 @@ object BookController {
         return ReturnData().setData(
             ReadableChapterData(
                 bookUrl = bookUrl,
+                chapterUrl = sourceChapter.url,
                 chapterIndex = chapterIndex,
                 chapterTitle = chapterTitle,
                 content = safeContent.take(readableUntil),
