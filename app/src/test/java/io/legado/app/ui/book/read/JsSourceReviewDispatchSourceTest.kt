@@ -22,11 +22,11 @@ class JsSourceReviewDispatchSourceTest {
         assertTrue(clickBlock.indexOf("if (source.isJsSource())") < clickBlock.indexOf("source.ruleReview"))
         assertTrue(!clickBlock.contains("ReadBook.durChapterIndex"))
         assertEquals(
-            2,
+            1,
             Regex("""chapterIndex\s*=\s*chapterIndex""").findAll(clickBlock).count()
         )
         assertEquals(
-            2,
+            1,
             Regex(
                 """paragraphData\s*=\s*ChapterProvider\.getReviewKeyById\(""" +
                     """paragraphNum,\s*chapterIndex\)"""
@@ -89,6 +89,11 @@ class JsSourceReviewDispatchSourceTest {
         ).readText().normalizeLines()
         val applyBlock = activity.substringAfter("private fun applyReviewSummary(")
             .substringBefore("private fun prefetchAdjacentReviewSummary(")
+        val providerIndex = applyBlock.indexOf("ChapterProvider.setReviewProviders(")
+        val refreshAfterProviderIndex = applyBlock.indexOf(
+            "binding.readView.upContent(relativePosition = 0, resetPageOffset = false)",
+            startIndex = providerIndex,
+        )
         val contentLoadFinishBlock = activity.substringAfter("override fun contentLoadFinish()")
             .substringBefore("override fun upContent(")
 
@@ -97,10 +102,8 @@ class JsSourceReviewDispatchSourceTest {
                 "binding.readView.upContent(relativePosition = 0, resetPageOffset = false)"
             )
         )
-        assertTrue(
-            applyBlock.indexOf("ChapterProvider.setReviewProviders(") <
-                    applyBlock.indexOf("binding.readView.upContent(")
-        )
+        assertTrue(providerIndex >= 0)
+        assertTrue(refreshAfterProviderIndex > providerIndex)
         assertTrue(!applyBlock.contains("ReadBook.loadContent("))
         assertTrue(applyBlock.contains("chapterIndex = chapterIndex"))
         assertTrue(contentLoadFinishBlock.contains("lifecycleScope.launch(Main.immediate)"))

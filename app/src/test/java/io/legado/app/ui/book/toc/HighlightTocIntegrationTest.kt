@@ -138,7 +138,7 @@ class HighlightTocIntegrationTest {
         assertTrue(fragment.contains("EXTRA_HIGHLIGHT_LAYOUT_TITLE_LENGTH"))
         assertTrue(fragment.contains("EXTRA_HIGHLIGHT_ANCHOR_TEXT"))
         assertTrue(fragment.contains("highlight.chapterPosEnd - highlight.chapterPos == it.length"))
-        assertTrue(readBook.contains("if (hasPendingHighlightJump()) return"))
+        assertTrue(readBook.contains("if (hasPendingHighlightJump()) {"))
         assertTrue(readBook.countMatches("positionReady && !available") >= 2)
         assertTrue(readBook.contains("if (curTextChapter !== textChapter) return false"))
         assertEquals(2, readBook.countMatches("resolvePendingHighlightAnchor(book, textChapter)"))
