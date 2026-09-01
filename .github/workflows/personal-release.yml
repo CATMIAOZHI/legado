@@ -70,7 +70,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6.3.0
 
-      - name: Install persistent debug signing key
+      - name: Install persistent personal signing key
         env:
           PERSONAL_DEBUG_KEYSTORE_B64: ${{ secrets.PERSONAL_DEBUG_KEYSTORE_B64 }}
           PERSONAL_DEBUG_STORE_PASSWORD: ${{ secrets.PERSONAL_DEBUG_STORE_PASSWORD }}
@@ -95,7 +95,7 @@ jobs:
           sed -i "s/^def version = .*/def version = \"$VERSION\"/" app/build.gradle
           grep -F "def version = \"$VERSION\"" app/build.gradle
 
-      - name: Run tests and build upgrade-compatible APK
+      - name: Run tests and build signed release APK
         run: |
           chmod +x gradlew
           # Stable 3.26082823 has unrelated failing JS/RSS baseline tests.
@@ -112,8 +112,10 @@ jobs:
             --tests io.legado.app.ui.book.read.page.provider.NativeReviewProviderSourceTest \
             --tests io.legado.app.ui.book.toc.HighlightTocIntegrationTest \
             --tests io.legado.app.ci.TestReleaseWorkflowTest \
+            --tests io.legado.app.ci.PersonalReleaseWorkflowTest \
             --build-cache --parallel --stacktrace
-          ./gradlew :app:assembleDebug \
+          ./gradlew :app:assembleRelease \
+            -PpersonalReleaseApplicationIdSuffix=.debug \
             --no-build-cache --parallel --stacktrace
 
       - name: Collect and verify APK
@@ -121,7 +123,7 @@ jobs:
         run: |
           mkdir -p dist
           bash .github/scripts/collect-apks.sh \
-            app/build/outputs/apk/app/debug \
+            app/build/outputs/apk/app/release \
             dist app "$VERSION" ry universal
 
           apk="$(find dist -maxdepth 1 -type f -name '*.apk' -print -quit)"
@@ -134,7 +136,11 @@ jobs:
           package_line="$("$build_tools/aapt" dump badging "$apk" | head -n 1)"
           echo "$package_line"
           grep -F "name='com.legado.app.debug'" <<< "$package_line"
-          grep -F "versionName='${VERSION}debug'" <<< "$package_line"
+          grep -F "versionName='${VERSION}'" <<< "$package_line"
+          if "$build_tools/aapt" dump badging "$apk" | grep -Fqx "application-debuggable"; then
+            echo "Personal release APK must not be debuggable"
+            exit 1
+          fi
 
           cert_output="$("$build_tools/apksigner" verify --print-certs "$apk" 2>&1)"
           printf '%s\n' "$cert_output"
@@ -166,9 +172,10 @@ jobs:
             printf -- '- 保留 Operit AI 段评与安全正文接口。\n'
             printf -- '- 章节目录插入、更新或净化替换时，按稳定章节 URL 读取，避免章节错位。\n\n'
             printf '包名：`com.legado.app.debug`  \n'
+            printf '构建类型：`release`  \n'
             printf '版本码：`%s`  \n' "$VERSION_CODE"
             printf '提交：`%s`  \n\n' "$BUILD_COMMIT"
-            printf '此 APK 使用与现有适配版相同的持久化签名，可直接覆盖安装并保留数据。'
+            printf '此 APK 使用与现有适配版相同的包名和持久化签名，可直接覆盖安装并保留数据。'
           } > release-notes.md
 
       - name: Upload build artifact

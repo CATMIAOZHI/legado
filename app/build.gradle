@@ -37,6 +37,9 @@ try {
     // Keep source archives buildable when Git is unavailable.
 }
 def armOnly = project.findProperty("armOnly")?.toBoolean() ?: false
+// Personal releases keep the existing package ID so the signed release variant can upgrade it.
+def personalReleaseApplicationIdSuffix =
+        project.findProperty("personalReleaseApplicationIdSuffix")?.toString()
 
 android {
     compileSdk = compile_sdk_version
@@ -111,7 +114,7 @@ android {
             if (project.hasProperty("RELEASE_STORE_FILE")) {
                 signingConfig = signingConfigs.myConfig
             }
-            applicationIdSuffix '.release'
+            applicationIdSuffix personalReleaseApplicationIdSuffix ?: '.release'
             if (getApplicationIdSuffix() == '.releaseA') {
                 manifestPlaceholders.put("app_name", "@string/app_name_a")
             } else {
