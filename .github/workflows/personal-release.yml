@@ -83,6 +83,12 @@ jobs:
             -keystore "$HOME/.android/debug.keystore" \
             -storepass "$PERSONAL_DEBUG_STORE_PASSWORD" \
             -alias androiddebugkey >/dev/null
+          {
+            printf '%s\n' "RELEASE_STORE_FILE=$HOME/.android/debug.keystore"
+            printf '%s\n' "RELEASE_STORE_PASSWORD=$PERSONAL_DEBUG_STORE_PASSWORD"
+            echo "RELEASE_KEY_ALIAS=androiddebugkey"
+            printf '%s\n' "RELEASE_KEY_PASSWORD=$PERSONAL_DEBUG_STORE_PASSWORD"
+          } >> gradle.properties
 
       - name: Set release version
         run: |
@@ -108,7 +114,7 @@ jobs:
             --tests io.legado.app.ci.TestReleaseWorkflowTest \
             --build-cache --parallel --stacktrace
           ./gradlew :app:assembleDebug \
-            --build-cache --parallel --stacktrace
+            --no-build-cache --parallel --stacktrace
 
       - name: Collect and verify APK
         id: apk
@@ -133,7 +139,7 @@ jobs:
           cert_output="$("$build_tools/apksigner" verify --print-certs "$apk" 2>&1)"
           printf '%s\n' "$cert_output"
           cert_sha="$(printf '%s\n' "$cert_output" \
-            | awk -F ': ' '/certificate SHA-256 digest:/ { print $2; exit }' \
+            | awk -F ': ' '/certificate SHA-256 digest:/ { print $NF; exit }' \
             | tr -d '\r[:space:]')"
           if [ "$cert_sha" != "$EXPECTED_CERT_SHA256" ]; then
             echo "Unexpected APK signing certificate: $cert_sha"
