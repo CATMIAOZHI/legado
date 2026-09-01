@@ -10,13 +10,76 @@ internal data class OperitAiReviewSummary(
     val contentHash: String,
     val counts: Map<Int, Int>,
     val previews: Map<Int, String>,
+    val sourceParagraphIndices: Map<Int, Int>,
 )
+
+internal data class OperitAiReviewSummaryItem(
+    val sourceParagraphIndex: Int,
+    val count: Int,
+    val preview: String,
+    val paragraphFingerprint: String,
+    val sourceUnique: Boolean,
+)
+
+internal data class OperitAiReviewMappedItems(
+    val counts: Map<Int, Int>,
+    val previews: Map<Int, String>,
+    val sourceParagraphIndices: Map<Int, Int>,
+)
+
+internal object OperitAiReviewMappingSupport {
+    fun map(
+        items: List<OperitAiReviewSummaryItem>,
+        currentParagraphFingerprints: Map<Int, String>,
+        remapRequired: Boolean,
+    ): OperitAiReviewMappedItems {
+        val currentIndicesByFingerprint =
+            if (remapRequired) {
+                currentParagraphFingerprints.entries.groupBy(
+                    keySelector = Map.Entry<Int, String>::value,
+                    valueTransform = Map.Entry<Int, String>::key,
+                )
+            } else {
+                emptyMap()
+            }
+        val counts = linkedMapOf<Int, Int>()
+        val previews = linkedMapOf<Int, String>()
+        val sourceParagraphIndices = linkedMapOf<Int, Int>()
+        items.forEach { item ->
+            if (item.sourceParagraphIndex <= 0 || item.count <= 0) return@forEach
+            val currentParagraphIndex =
+                if (!remapRequired) {
+                    item.sourceParagraphIndex
+                } else {
+                    if (!item.sourceUnique || item.paragraphFingerprint.isBlank()) return@forEach
+                    currentIndicesByFingerprint[item.paragraphFingerprint]
+                        ?.singleOrNull()
+                        ?: return@forEach
+                }
+            counts[currentParagraphIndex] =
+                (counts[currentParagraphIndex] ?: 0) + item.count
+            item.preview.trim().takeIf(String::isNotBlank)?.let { preview ->
+                previews.putIfAbsent(currentParagraphIndex, preview)
+            }
+            sourceParagraphIndices.putIfAbsent(
+                currentParagraphIndex,
+                item.sourceParagraphIndex,
+            )
+        }
+        return OperitAiReviewMappedItems(
+            counts = counts,
+            previews = previews,
+            sourceParagraphIndices = sourceParagraphIndices,
+        )
+    }
+}
 
 internal object OperitAiReviewClient {
     fun getSummary(
         bookId: String,
         chapterIndex: Int,
         contentHash: String,
+        currentParagraphFingerprints: Map<Int, String>,
     ): OperitAiReviewSummary? {
         for (authority in installedAuthorities()) {
             val data = query(
@@ -26,27 +89,44 @@ internal object OperitAiReviewClient {
                     "bookId" to bookId,
                     "chapterIndex" to chapterIndex.toString(),
                     "contentHash" to contentHash,
+                    "mappingVersion" to
+                        OperitReviewParagraphContractSupport.PARAGRAPH_MAPPING_VERSION,
                 ),
             ) ?: continue
             if (!data.optBoolean("enabled") || !data.optBoolean("ready")) continue
             val comments = data.optJSONArray("comments") ?: continue
-            val counts = linkedMapOf<Int, Int>()
-            val previews = linkedMapOf<Int, String>()
+            val remapRequired = data.optBoolean("remapRequired")
+            if (
+                remapRequired &&
+                data.optString("mappingVersion") !=
+                OperitReviewParagraphContractSupport.PARAGRAPH_MAPPING_VERSION
+            ) {
+                continue
+            }
+            val items = mutableListOf<OperitAiReviewSummaryItem>()
             repeat(comments.length()) { index ->
                 val item = comments.optJSONObject(index) ?: return@repeat
-                val paragraphIndex = item.optInt("paragraphIndex")
-                val count = item.optInt("count")
-                if (paragraphIndex <= 0 || count <= 0) return@repeat
-                counts[paragraphIndex] = count
-                item.optString("preview").trim().takeIf(String::isNotBlank)?.let {
-                    previews[paragraphIndex] = it
-                }
+                items +=
+                    OperitAiReviewSummaryItem(
+                        sourceParagraphIndex = item.optInt("paragraphIndex"),
+                        count = item.optInt("count"),
+                        preview = item.optString("preview"),
+                        paragraphFingerprint = item.optString("paragraphFingerprint"),
+                        sourceUnique = item.optBoolean("sourceUnique"),
+                    )
             }
+            val mapped =
+                OperitAiReviewMappingSupport.map(
+                    items = items,
+                    currentParagraphFingerprints = currentParagraphFingerprints,
+                    remapRequired = remapRequired,
+                )
             return OperitAiReviewSummary(
                 authority = authority,
                 contentHash = data.optString("contentHash", contentHash),
-                counts = counts,
-                previews = previews,
+                counts = mapped.counts,
+                previews = mapped.previews,
+                sourceParagraphIndices = mapped.sourceParagraphIndices,
             )
         }
         return null

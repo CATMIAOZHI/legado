@@ -82,6 +82,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         ruleHash: Int,
         aiAuthority: String? = null,
         aiContentHash: String? = null,
+        aiParagraphNum: Int? = null,
     ) : this() {
         arguments = Bundle().apply {
             putInt(ARG_PARAGRAPH_NUM, paragraphNum)
@@ -93,6 +94,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
             putInt(ARG_RULE_HASH, ruleHash)
             putString(ARG_AI_AUTHORITY, aiAuthority)
             putString(ARG_AI_CONTENT_HASH, aiContentHash)
+            aiParagraphNum?.let { putInt(ARG_AI_PARAGRAPH_NUM, it) }
         }
     }
 
@@ -107,6 +109,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
     private var ruleHash: Int = 0
     private var aiAuthority: String = ""
     private var aiContentHash: String = ""
+    private var aiParagraphNum: Int = 0
     private var isLoading = false
     private var hasMore = true
     private var currentPage = 1
@@ -219,6 +222,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         ruleHash = arguments?.getInt(ARG_RULE_HASH) ?: 0
         aiAuthority = arguments?.getString(ARG_AI_AUTHORITY).orEmpty()
         aiContentHash = arguments?.getString(ARG_AI_CONTENT_HASH).orEmpty()
+        aiParagraphNum = arguments?.getInt(ARG_AI_PARAGRAPH_NUM, paragraphNum) ?: paragraphNum
         binding.root.setBackgroundResource(R.drawable.bg_dialog_round_top)
         binding.dragHandle.visible()
         binding.toolBar.setBackgroundResource(R.drawable.bg_review_toolbar)
@@ -460,7 +464,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
                     authority = aiAuthority,
                     bookId = bookUrl,
                     chapterIndex = chapterIndex,
-                    paragraphIndex = paragraphNum,
+                    paragraphIndex = aiParagraphNum,
                     contentHash = aiContentHash,
                 )
             } else {
@@ -908,6 +912,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         const val ARG_RULE_HASH = "ruleHash"
         const val ARG_AI_AUTHORITY = "aiAuthority"
         const val ARG_AI_CONTENT_HASH = "aiContentHash"
+        const val ARG_AI_PARAGRAPH_NUM = "aiParagraphNum"
         const val TYPE_NORMAL = 0
         const val TYPE_MORE = 1
         const val PAYLOAD_AUDIO_STATE = "review_audio_state"

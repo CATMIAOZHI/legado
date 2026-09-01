@@ -2034,8 +2034,12 @@ class ReadBookActivity : BaseReadBookActivity(),
                 bookUrl = book.bookUrl,
                 sourceKey = sourceKey,
                 ruleHash = ruleHash,
-                aiAuthority = aiSummary?.authority,
-                aiContentHash = aiSummary?.contentHash,
+                aiAuthority = aiSummary?.authority?.takeIf { aiCount > 0 },
+                aiContentHash = aiSummary?.contentHash?.takeIf { aiCount > 0 },
+                aiParagraphNum =
+                    aiSummary?.sourceParagraphIndices
+                        ?.get(paragraphNum)
+                        ?.takeIf { aiCount > 0 },
             )
         )
     }
@@ -2285,6 +2289,8 @@ class ReadBookActivity : BaseReadBookActivity(),
                 bookId = book.bookUrl,
                 chapterIndex = chapterIndex,
                 contentHash = contentHash,
+                currentParagraphFingerprints =
+                    textChapter.operitReviewParagraphFingerprints,
             )
         }.onSuccess(Main) { result ->
             if (requestGeneration != aiReviewRequestGeneration) return@onSuccess

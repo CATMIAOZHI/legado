@@ -272,8 +272,13 @@ object ChapterProvider {
             isTransient = !saveChapterData,
         ).apply {
             bodyContent = bookContent.toString()
-            operitReviewContractHash =
-                OperitReviewParagraphContractSupport.fromTextList(bookContent.textList)?.hash
+            OperitReviewParagraphContractSupport.fromTextList(bookContent.textList)?.let {
+                operitReviewContractHash = it.hash
+                operitReviewParagraphFingerprints =
+                    it.paragraphs.associate { paragraph ->
+                        paragraph.id to paragraph.fingerprint
+                    }
+            }
             createLayout(scope, book, bookContent, saveChapterData)
         }
 

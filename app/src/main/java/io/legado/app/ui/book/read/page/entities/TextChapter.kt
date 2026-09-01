@@ -54,6 +54,7 @@ data class TextChapter(
     @Volatile
     var bodyContent: String = ""
     var operitReviewContractHash: String? = null
+    var operitReviewParagraphFingerprints: Map<Int, String> = emptyMap()
 
     val layoutChannel get() = layout!!.channel
 

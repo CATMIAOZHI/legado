@@ -5,6 +5,7 @@ import java.security.MessageDigest
 internal data class OperitReviewParagraph(
     val id: Int,
     val text: String,
+    val fingerprint: String,
 )
 
 internal data class OperitReviewParagraphContract(
@@ -37,6 +38,7 @@ internal object OperitReviewParagraphContractSupport {
                 OperitReviewParagraph(
                     id = index + 1,
                     text = text,
+                    fingerprint = paragraphFingerprint(text),
                 )
             }
             .toList()
@@ -53,5 +55,16 @@ internal object OperitReviewParagraphContractSupport {
         return OperitReviewParagraphContract(hash = hash, paragraphs = paragraphs)
     }
 
+    fun paragraphFingerprint(text: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(PARAGRAPH_FINGERPRINT_VERSION.toByteArray(Charsets.UTF_8))
+        digest.update(0)
+        digest.update(text.toByteArray(Charsets.UTF_8))
+        return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+    }
+
     private const val CONTRACT_VERSION = "legado-review-paragraphs-v1"
+    const val PARAGRAPH_MAPPING_VERSION = "paragraph-fingerprint-v1"
+    private const val PARAGRAPH_FINGERPRINT_VERSION =
+        "operit-review-paragraph-fingerprint-v1"
 }
