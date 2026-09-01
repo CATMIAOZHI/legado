@@ -1,0 +1,168 @@
+name: Personal Release
+
+run-name: Personal Release ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Personal release version, for example 3.26082823-ry.1
+        required: true
+        type: string
+      commit_sha:
+        description: Commit on master to build
+        required: true
+        default: master
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: personal-release
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      EXPECTED_CERT_SHA256: 9848d27c13c52394333ee88206e138c962f66b6229a5be83263e6c30c9b1ce11
+    steps:
+      - name: Validate inputs and signing credentials
+        env:
+          PERSONAL_DEBUG_KEYSTORE_B64: ${{ secrets.PERSONAL_DEBUG_KEYSTORE_B64 }}
+          PERSONAL_DEBUG_STORE_PASSWORD: ${{ secrets.PERSONAL_DEBUG_STORE_PASSWORD }}
+        run: |
+          if [[ ! "$VERSION" =~ ^3\.[0-9]{8}-ry\.[1-9][0-9]*$ ]]; then
+            echo "Invalid personal release version: $VERSION"
+            exit 1
+          fi
+          if [ -z "$PERSONAL_DEBUG_KEYSTORE_B64" ]; then
+            echo "Missing required secret: PERSONAL_DEBUG_KEYSTORE_B64"
+            exit 1
+          fi
+          if [ -z "$PERSONAL_DEBUG_STORE_PASSWORD" ]; then
+            echo "Missing required secret: PERSONAL_DEBUG_STORE_PASSWORD"
+            exit 1
+          fi
+
+      - name: Checkout requested commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+
+      - name: Verify commit belongs to master
+        id: commit
+        run: |
+          git fetch origin master
+          build_commit="$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$build_commit" origin/master
+          echo "sha=$build_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6.3.0
+
+      - name: Install persistent debug signing key
+        env:
+          PERSONAL_DEBUG_KEYSTORE_B64: ${{ secrets.PERSONAL_DEBUG_KEYSTORE_B64 }}
+          PERSONAL_DEBUG_STORE_PASSWORD: ${{ secrets.PERSONAL_DEBUG_STORE_PASSWORD }}
+        run: |
+          mkdir -p "$HOME/.android"
+          printf '%s' "$PERSONAL_DEBUG_KEYSTORE_B64" \
+            | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          keytool -list \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass "$PERSONAL_DEBUG_STORE_PASSWORD" \
+            -alias androiddebugkey >/dev/null
+
+      - name: Set release version
+        run: |
+          sed -i "s/^def version = .*/def version = \"$VERSION\"/" app/build.gradle
+          grep -F "def version = \"$VERSION\"" app/build.gradle
+
+      - name: Run tests and build upgrade-compatible APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest :app:assembleDebug \
+            --build-cache --parallel --stacktrace
+
+      - name: Collect and verify APK
+        id: apk
+        run: |
+          mkdir -p dist
+          bash .github/scripts/collect-apks.sh \
+            app/build/outputs/apk/app/debug \
+            dist app "$VERSION" ry universal
+
+          apk="$(find dist -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          if [ -z "$apk" ]; then
+            echo "No APK was collected"
+            exit 1
+          fi
+
+          build_tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)"
+          package_line="$("$build_tools/aapt" dump badging "$apk" | head -n 1)"
+          echo "$package_line"
+          grep -F "name='com.legado.app.debug'" <<< "$package_line"
+          grep -F "versionName='${VERSION}debug'" <<< "$package_line"
+
+          cert_sha="$("$build_tools/apksigner" verify --print-certs "$apk" \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+            | head -n 1)"
+          if [ "$cert_sha" != "$EXPECTED_CERT_SHA256" ]; then
+            echo "Unexpected APK signing certificate: $cert_sha"
+            exit 1
+          fi
+
+          version_code="$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" <<< "$package_line")"
+          if [ -z "$version_code" ]; then
+            echo "Unable to read APK versionCode"
+            exit 1
+          fi
+
+          sha256sum "$apk" > dist/SHA256SUMS.txt
+          echo "version_code=$version_code" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release notes
+        env:
+          BUILD_COMMIT: ${{ steps.commit.outputs.sha }}
+          VERSION_CODE: ${{ steps.apk.outputs.version_code }}
+        run: |
+          {
+            printf '基于 Legado 稳定版 3.26082823 的 Operit 阅读伴侣适配版。\n\n'
+            printf -- '- 同步上游稳定版 3.26082823。\n'
+            printf -- '- 保留 Operit AI 段评与安全正文接口。\n'
+            printf -- '- 章节目录插入、更新或净化替换时，按稳定章节 URL 读取，避免章节错位。\n\n'
+            printf '包名：`com.legado.app.debug`  \n'
+            printf '版本码：`%s`  \n' "$VERSION_CODE"
+            printf '提交：`%s`  \n\n' "$BUILD_COMMIT"
+            printf '此 APK 使用与现有适配版相同的持久化签名，可直接覆盖安装并保留数据。'
+          } > release-notes.md
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: legado-${{ env.VERSION }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ env.VERSION }}
+          target_commitish: ${{ steps.commit.outputs.sha }}
+          name: Legado ${{ env.VERSION }}
+          body_path: release-notes.md
+          files: dist/*
+          fail_on_unmatched_files: true
+          prerelease: false
+          make_latest: true

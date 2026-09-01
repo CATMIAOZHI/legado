@@ -83,6 +83,7 @@ jobs:
           echo "commit=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Verify Release Credentials
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           RELEASE_KEY_STORE: ${{ secrets.RELEASE_KEY_STORE }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
@@ -101,6 +102,7 @@ jobs:
           done
 
   build:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: prepare
     strategy:
       matrix:
