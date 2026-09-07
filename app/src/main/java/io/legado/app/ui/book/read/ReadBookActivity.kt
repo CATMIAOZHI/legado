@@ -2383,10 +2383,16 @@ class ReadBookActivity : BaseReadBookActivity(),
 
     private fun scheduleAiReviewPreview() {
         aiReviewPreviewRunnable?.let(handler::removeCallbacks)
-        aiReviewPreviewView?.let { preview ->
-            (preview.parent as? ViewGroup)?.removeView(preview)
-        }
+        val previousPreview = aiReviewPreviewView
         aiReviewPreviewView = null
+        // Page changes can arrive from computeScroll while the parent is recording its
+        // display list. Defer child removal until that traversal has returned.
+        previousPreview?.let { preview ->
+            handler.post {
+                preview.animate().cancel()
+                (preview.parent as? ViewGroup)?.removeView(preview)
+            }
+        }
         aiReviewPreviewRunnable = Runnable {
             if (isFinishing || isDestroyed || menuLayoutIsVisible) return@Runnable
             val page = binding.readView.curPage.textPage
