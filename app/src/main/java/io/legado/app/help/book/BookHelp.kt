@@ -525,6 +525,9 @@ object BookHelp {
         return readContent(book, bookChapter, book.getFolderName(), fileName)
     }
 
+    fun getCachedContent(book: Book, bookChapter: BookChapter): String? =
+        LocalBook.withoutRemoteRestore { getContent(book, bookChapter) }
+
     internal fun getContent(
         book: Book,
         bookChapter: BookChapter,

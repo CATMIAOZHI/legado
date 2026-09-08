@@ -404,7 +404,7 @@ object BookController {
         } else {
             try {
                 if (cachedOnly) {
-                    val cached = BookHelp.getContent(book, sourceChapter)
+                    val cached = BookHelp.getCachedContent(book, sourceChapter)
                         ?: return ReturnData().setData(mapOf("cached" to false))
                     ContentProcessor.get(book.name, book.origin)
                         .getContent(book, sourceChapter, cached, includeTitle = false).toString()

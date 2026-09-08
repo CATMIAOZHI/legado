@@ -106,6 +106,7 @@ jobs:
             --tests io.legado.app.api.ReaderProviderRoutesTest \
             --tests io.legado.app.api.ReviewWebApiContractTest \
             --tests io.legado.app.model.ReadableSnapshotStoreTest \
+            --tests io.legado.app.model.localBook.LocalBookCachedReadTest \
             --tests io.legado.app.model.jsSource.JsSourceReviewTest \
             --tests io.legado.app.ui.book.read.JsSourceReviewDispatchSourceTest \
             --tests io.legado.app.ui.book.read.page.NativeReviewRenderingSourceTest \
@@ -164,6 +165,8 @@ jobs:
             printf '基于 Legado 稳定版 3.26082823 的 Operit 阅读伴侣适配版。\n\n'
             printf -- '- 同步上游稳定版 3.26082823。\n'
             printf -- '- 保留 Operit AI 段评与安全正文接口。\n'
+            printf -- '- 修复段评预览在绘制过程中移除视图导致的崩溃。\n'
+            printf -- '- 阅读伴侣可读取已下载旧章；缺失内容不联网补章，也不触发 WebDAV 恢复。\n'
             printf -- '- 章节目录插入、更新或净化替换时，按稳定章节 URL 读取，避免章节错位。\n\n'
             printf '包名：`com.legado.app.debug`  \n'
             printf '版本码：`%s`  \n' "$VERSION_CODE"

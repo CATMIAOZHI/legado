@@ -111,6 +111,20 @@ internal fun prepareLocalBookOutputFile(root: File, relativePath: String): File 
  */
 object LocalBook {
 
+    private val remoteRestoreDisabled = ThreadLocal<Boolean>()
+
+    // Local parsers read synchronously; keep this request policy out of their shared caches.
+    fun <T> withoutRemoteRestore(block: () -> T): T {
+        val previous = remoteRestoreDisabled.get()
+        remoteRestoreDisabled.set(true)
+        return try {
+            block()
+        } finally {
+            if (previous == null) remoteRestoreDisabled.remove()
+            else remoteRestoreDisabled.set(previous)
+        }
+    }
+
     private val nameAuthorPatterns = arrayOf(
         Pattern.compile("(.*?)《([^《》]+)》.*?作者：(.*)"),
         Pattern.compile("(.*?)《([^《》]+)》(.*)"),
@@ -235,6 +249,10 @@ object LocalBook {
                 }
             }
         } catch (e: Exception) {
+            if (remoteRestoreDisabled.get() == true) {
+                if (e is FileNotFoundException) return null
+                throw e
+            }
             e.printOnDebug()
             AppLog.put("获取本地书籍内容失败\n${e.localizedMessage}", e)
             "获取本地书籍内容失败\n${e.localizedMessage}"
@@ -604,6 +622,7 @@ object LocalBook {
 
     // 下载 book 对应的远程文件并绑定本地路径
     internal fun downloadRemoteBook(localBook: Book): Boolean {
+        if (remoteRestoreDisabled.get() == true) return false
         val webDavUrl = localBook.getRemoteUrl()?.takeIf(String::isNotBlank)
         if (webDavUrl == null && !AppConfig.webDavBookAutoRestore) return false
         val defaultBookWebDav = if (webDavUrl == null) {
