@@ -102,6 +102,7 @@ class ReaderProvider : ContentProvider() {
                 getBookContent = { BookController.getBookContent(it) },
                 getReadingSnapshot = { BookController.getReadingSnapshot(it) },
                 getReadableBookContent = { BookController.getReadableBookContent(it) },
+                getCachedReadableBookContent = { BookController.getReadableBookContent(it, cachedOnly = true) },
                 getAnnotationBookContent = { BookController.getAnnotationBookContent(it) },
                 refreshToc = { BookController.refreshToc(it) },
                 getChapterList = { BookController.getChapterList(it) },

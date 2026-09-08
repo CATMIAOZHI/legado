@@ -10,6 +10,20 @@ import org.junit.Test
 class ReaderProviderRoutesTest {
 
     @Test
+    fun `cache route never dispatches to network capable reader`() {
+        val result = dispatchReaderProviderQuery(
+            ReaderProviderRequestCode.GetCachedReadableBookContent,
+            mapOf("url" to listOf("book"), "index" to listOf("3")),
+            getReadableBookContent = { error("network-capable route must not run") },
+            getCachedReadableBookContent = { parameters ->
+                assertEquals("3", parameters["index"]?.single())
+                "not_downloaded"
+            },
+        )
+        assertEquals("not_downloaded", result)
+    }
+
+    @Test
     fun `registered paths resolve to their public request semantics`() {
         val expected = mapOf(
             "bookSource/insert" to ReaderProviderRequestCode.SaveBookSource,
@@ -30,6 +44,7 @@ class ReaderProviderRoutesTest {
             "book/cover/query" to ReaderProviderRequestCode.GetBookCover,
             "reading/snapshot/query" to ReaderProviderRequestCode.GetReadingSnapshot,
             "book/readableContent/query" to ReaderProviderRequestCode.GetReadableBookContent,
+            "book/cachedReadableContent/query" to ReaderProviderRequestCode.GetCachedReadableBookContent,
             "book/annotationContent/query" to ReaderProviderRequestCode.GetAnnotationBookContent,
         )
 

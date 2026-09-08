@@ -20,6 +20,7 @@ internal enum class ReaderProviderRequestCode {
     SaveBookProgress,
     GetReadingSnapshot,
     GetReadableBookContent,
+    GetCachedReadableBookContent,
     GetAnnotationBookContent,
 }
 
@@ -55,6 +56,7 @@ internal object ReaderProviderRoutes {
             "book/readableContent/query",
             ReaderProviderRequestCode.GetReadableBookContent,
         ),
+        ReaderProviderRoute("book/cachedReadableContent/query", ReaderProviderRequestCode.GetCachedReadableBookContent),
         ReaderProviderRoute(
             "book/annotationContent/query",
             ReaderProviderRequestCode.GetAnnotationBookContent,
@@ -132,6 +134,9 @@ internal fun <T> dispatchReaderProviderQuery(
     getReadableBookContent: (Map<String, List<String>>) -> T = {
         unexpectedReaderProviderRequest(requestCode)
     },
+    getCachedReadableBookContent: (Map<String, List<String>>) -> T = {
+        unexpectedReaderProviderRequest(requestCode)
+    },
     getAnnotationBookContent: (Map<String, List<String>>) -> T = {
         unexpectedReaderProviderRequest(requestCode)
     },
@@ -154,6 +159,7 @@ internal fun <T> dispatchReaderProviderQuery(
         ReaderProviderRequestCode.GetBookContent -> getBookContent(parameters)
         ReaderProviderRequestCode.GetReadingSnapshot -> getReadingSnapshot(parameters)
         ReaderProviderRequestCode.GetReadableBookContent -> getReadableBookContent(parameters)
+        ReaderProviderRequestCode.GetCachedReadableBookContent -> getCachedReadableBookContent(parameters)
         ReaderProviderRequestCode.GetAnnotationBookContent -> getAnnotationBookContent(parameters)
         ReaderProviderRequestCode.RefreshToc -> refreshToc(parameters)
         ReaderProviderRequestCode.GetChapterList -> getChapterList(parameters)

@@ -389,3 +389,8 @@ Method = query
 URL = content://providerHost/book/cover/query?path=xxxx
 Method = query
 ```
+
+
+### 阅读伴侣仅本地正文接口（ContentProvider）
+
+路径：`book/cachedReadableContent/query`，参数 `url`（书籍地址）和 `index`（零基章节序号）。仅从已下载缓存或本地书文件读取，应用现有正文净化及阅读位置限制，不触发网络下载。本地没有正文时成功返回 `data: {"cached": false}`；有正文时返回与 `book/readableContent/query` 相同的安全正文结构。客户端不得在接口不支持或缺少缓存时回退到可联网的正文接口。

@@ -375,7 +375,7 @@ object BookController {
      * Future chapters are rejected before content loading. The boundary is captured again after
      * loading so a concurrent backward progress change also fails closed.
      */
-    fun getReadableBookContent(parameters: Map<String, List<String>>): ReturnData {
+    fun getReadableBookContent(parameters: Map<String, List<String>>, cachedOnly: Boolean = false): ReturnData {
         val bookUrl = parameters["url"]?.firstOrNull()
             ?: return ReturnData().setErrorMsg("参数url不能为空，请指定书籍地址")
         val chapterIndex = parameters["index"]?.firstOrNull()?.toIntOrNull()
@@ -403,7 +403,14 @@ object BookController {
                 ?: return ReturnData().setErrorMsg("当前章节的安全正文暂不可用")
         } else {
             try {
-                runBlocking { loadProcessedBookContent(book, sourceChapter) }.toString()
+                if (cachedOnly) {
+                    val cached = BookHelp.getContent(book, sourceChapter)
+                        ?: return ReturnData().setData(mapOf("cached" to false))
+                    ContentProcessor.get(book.name, book.origin)
+                        .getContent(book, sourceChapter, cached, includeTitle = false).toString()
+                } else {
+                    runBlocking { loadProcessedBookContent(book, sourceChapter) }.toString()
+                }
             } catch (error: Exception) {
                 return ReturnData().setErrorMsg(error.stackTraceStr)
             }
