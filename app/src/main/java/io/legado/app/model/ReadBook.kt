@@ -1381,6 +1381,11 @@ object ReadBook : CoroutineScope by MainScope() {
                         callBack?.onLayoutPageCompleted(index, page)
                     }
                     resolvePendingHighlightAnchor(book, textChapter)
+                    if (curTextChapter === textChapter && ReadBook.book === book &&
+                        durChapterIndex == textChapter.chapter.index
+                    ) {
+                        saveRead()
+                    }
                     if (upContent) {
                         callBack?.upContent(
                             offset,
@@ -1513,6 +1518,11 @@ object ReadBook : CoroutineScope by MainScope() {
                         callBack?.onLayoutPageCompleted(index, page)
                     }
                     resolvePendingHighlightAnchor(book, textChapter)
+                    if (curTextChapter === textChapter && ReadBook.book === book &&
+                        durChapterIndex == textChapter.chapter.index
+                    ) {
+                        saveRead()
+                    }
                     if (upContent) {
                         callBack?.upContent(
                             offset,

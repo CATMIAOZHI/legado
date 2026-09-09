@@ -1591,6 +1591,7 @@ class ReadBookActivity : BaseReadBookActivity(),
         val (chapterIndex, line) = binding.readView.getReadPosition() ?: return
         if (chapterIndex == ReadBook.durChapterIndex) {
             ReadBook.durChapterPos = line.chapterPosition
+            ReadBook.saveRead(true)
         }
     }
 
@@ -1632,13 +1633,13 @@ class ReadBookActivity : BaseReadBookActivity(),
                 val durChapterPos = chapterStart.coerceAtLeast(0)
                 ReadBook.openChapter(speakingChapterIndex, durChapterPos) {
                     ReadAloud.restoreReadAloudFollow()
-                    upTextChapterAloudSpan(chapterStart)
+                    upTextChapterAloudSpan(chapterStart, speakingChapterIndex)
                 }
             }
 
             else -> {
                 ReadAloud.restoreReadAloudFollow()
-                if (chapterStart >= 0) upTextChapterAloudSpan(chapterStart)
+                if (chapterStart >= 0) upTextChapterAloudSpan(chapterStart, speakingChapterIndex)
             }
         }
     }
@@ -1646,11 +1647,19 @@ class ReadBookActivity : BaseReadBookActivity(),
     /**
      * 把显示页定位到章内字符位置并绘制朗读高亮。
      */
-    private fun upTextChapterAloudSpan(chapterStart: Int) {
+    private fun upTextChapterAloudSpan(chapterStart: Int, speechChapterIndex: Int) {
         if (chapterStart < 0) return
         val textChapter = ReadBook.curTextChapter ?: return
-        lifecycleScope.launch(IO) {
+        val bookUrl = ReadBook.book?.bookUrl ?: return
+        lifecycleScope.launch(Main.immediate) {
+            if (ReadBook.book?.bookUrl != bookUrl ||
+                ReadBook.curTextChapter !== textChapter ||
+                textChapter.chapter.bookUrl != bookUrl ||
+                textChapter.chapter.index != speechChapterIndex ||
+                ReadBook.durChapterIndex != speechChapterIndex
+            ) return@launch
             ReadBook.durChapterPos = chapterStart
+            ReadBook.saveRead(true)
             val pageIndex = ReadBook.durPageIndex
             val aloudSpanStart = chapterStart - textChapter.getReadLength(pageIndex)
             textChapter.getPage(pageIndex)?.upPageAloudSpan(aloudSpanStart)
@@ -2599,6 +2608,7 @@ class ReadBookActivity : BaseReadBookActivity(),
                             }
                         } else {
                             ReadBook.durChapterPos = line.chapterPosition
+                            ReadBook.saveRead(true)
                             ReadBook.readAloud(
                                 startPos = line.pagePosition,
                                 rewindToSentenceStart = true
@@ -2628,6 +2638,7 @@ class ReadBookActivity : BaseReadBookActivity(),
                             }
                         } else {
                             ReadBook.durChapterPos = line.chapterPosition
+                            ReadBook.saveRead(true)
                             ReadBook.readAloud(
                                 startPos = line.pagePosition,
                                 rewindToSentenceStart = true
@@ -3238,16 +3249,30 @@ class ReadBookActivity : BaseReadBookActivity(),
         observeEvent<Boolean>(EventBus.READ_ALOUD_FOLLOW) {
             updateReadAloudFloatBar()
         }
-        observeEventSticky<Int>(EventBus.TTS_PROGRESS) { chapterStart ->
+        observeEventSticky<BaseReadAloudService.ReadingProgress>(EventBus.TTS_PROGRESS) { progress ->
+            if (progress.bookUrl != ReadBook.book?.bookUrl ||
+                progress.chapterIndex != ReadAloud.readAloudChapterIndex
+            ) return@observeEventSticky
+            val chapterStart = progress.position
             lastReadAloudChapterStart = chapterStart
-            lastReadAloudChapterIndex = ReadAloud.readAloudChapterIndex
-            lifecycleScope.launch(IO) {
+            lastReadAloudChapterIndex = progress.chapterIndex
+            val speechChapterIndex = progress.chapterIndex
+            val bookUrl = progress.bookUrl
+            val eventTextChapter = ReadBook.curTextChapter
+            lifecycleScope.launch(Main.immediate) {
                 if (BaseReadAloudService.shouldApplySpeechProgressToVisibleReader(
                         isSpeechPlaying = BaseReadAloudService.isPlay()
-                    )
+                    ) && chapterStart >= 0 &&
+                    ReadBook.book?.bookUrl == bookUrl &&
+                    ReadBook.curTextChapter === eventTextChapter &&
+                    ReadBook.durChapterIndex == speechChapterIndex
                 ) {
                     ReadBook.curTextChapter?.let { textChapter ->
+                        if (textChapter.chapter.bookUrl != bookUrl ||
+                            textChapter.chapter.index != speechChapterIndex
+                        ) return@let
                         ReadBook.durChapterPos = chapterStart
+                        ReadBook.saveRead(true)
                         val pageIndex = ReadBook.durPageIndex
                         val aloudSpanStart = chapterStart - textChapter.getReadLength(pageIndex)
                         textChapter.getPage(pageIndex)

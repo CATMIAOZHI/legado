@@ -494,9 +494,19 @@ abstract class BaseReadAloudService : BaseService(),
 
     abstract fun upSpeechRate(reset: Boolean = false)
 
+    data class ReadingProgress(
+        val bookUrl: String,
+        val chapterIndex: Int,
+        val position: Int,
+    )
+
     fun upTtsProgress(progress: Int) {
+        val chapter = textChapter?.chapter ?: return
         readAloudChapterStart = progress
-        postEvent(EventBus.TTS_PROGRESS, progress)
+        postEvent(
+            EventBus.TTS_PROGRESS,
+            ReadingProgress(chapter.bookUrl, chapter.index, progress),
+        )
     }
 
     private fun prevP() {
