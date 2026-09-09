@@ -32,6 +32,9 @@ import io.legado.app.utils.printOnDebug
 import io.legado.app.utils.stackTraceStr
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import splitties.init.appCtx
 import java.io.File
 import java.util.WeakHashMap
@@ -67,6 +70,7 @@ object BookController {
         val bodyPosition: Int?,
         val bodyContent: String?,
         val capturedAt: Long,
+        val visibleStart: Int? = null,
     )
 
     private data class ReadingSnapshotData(
@@ -93,6 +97,8 @@ object BookController {
         val isComplete: Boolean,
         val readingChapterIndex: Int,
         val capturedAt: Long,
+        val visibleStart: Int? = null,
+        val visibleEnd: Int? = null,
     )
 
     private data class AnnotationParagraphData(
@@ -461,11 +467,34 @@ object BookController {
                 isComplete = chapterIndex < latestBoundary.chapterIndex,
                 readingChapterIndex = latestBoundary.chapterIndex,
                 capturedAt = latestBoundary.capturedAt,
+                visibleStart = latestBoundary.visibleStart?.takeIf { chapterIndex == latestBoundary.chapterIndex },
+                visibleEnd = readableUntil.takeIf { chapterIndex == latestBoundary.chapterIndex && latestBoundary.visibleStart != null },
             )
         )
     }
 
     private fun captureReadingBoundary(book: Book): ReadingBoundarySnapshot {
+        // Binder calls sample the laid-out viewport on Main; scrolling need not save progress first.
+        if (ReadBook.callBack != null) {
+            val visible = runBlocking {
+                withTimeoutOrNull(1500) {
+                    withContext(Dispatchers.Main.immediate) {
+                        ReadBook.callBack?.visibleReadingSnapshot()?.takeIf { it.bookUrl == book.bookUrl }
+                    }
+                }
+            }
+            if (visible != null) return ReadingBoundarySnapshot(
+                bookUrl = visible.bookUrl,
+                chapterIndex = visible.chapterIndex,
+                chapterTitle = visible.chapterTitle,
+                layoutPosition = visible.layoutPosition,
+                layoutTitleLength = visible.layoutPosition - visible.bodyStart,
+                bodyPosition = visible.bodyEnd,
+                bodyContent = visible.content,
+                capturedAt = System.currentTimeMillis(),
+                visibleStart = visible.bodyStart,
+            )
+        }
         /*
          * saveRead publishes this immutable object synchronously before its database write is
          * queued. A Binder query therefore sees an immediate backward seek and never combines

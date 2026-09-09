@@ -1913,6 +1913,8 @@ object ReadBook : CoroutineScope by MainScope() {
     }
 
     interface CallBack : LayoutProgressListener {
+        fun visibleReadingSnapshot(): VisibleReadingSnapshot? = null
+
         fun upMenuView()
 
         fun loadChapterList(book: Book)

@@ -1069,6 +1069,11 @@ class ReadView(context: Context, attrs: AttributeSet) :
         return curPage.getCurVisiblePage()
     }
 
+    fun getVisibleReadingSnapshot(): io.legado.app.model.VisibleReadingSnapshot? {
+        if (replacePreview != null) return null
+        return curPage.getVisibleReadingSnapshot()
+    }
+
     fun getReadPosition(): Pair<Int, TextLine>? {
         if (replacePreview != null) return null
         return curPage.getReadPosition()

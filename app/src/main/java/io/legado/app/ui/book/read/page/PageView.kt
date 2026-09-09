@@ -491,6 +491,8 @@ class PageView(context: Context) : FrameLayout(context) {
         return binding.contentTextView.getCurVisiblePage()
     }
 
+    fun getVisibleReadingSnapshot() = binding.contentTextView.getVisibleReadingSnapshot()
+
     fun getReadPosition(): Pair<Int, TextLine>? {
         return binding.contentTextView.getReadPosition()
     }

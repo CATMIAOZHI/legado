@@ -1595,6 +1595,11 @@ class ReadBookActivity : BaseReadBookActivity(),
         }
     }
 
+    override fun visibleReadingSnapshot(): io.legado.app.model.VisibleReadingSnapshot? {
+        if (isFinishing || isDestroyed || ReadBook.msg != null || !ReadBook.isLayoutAvailable) return null
+        return binding.readView.getVisibleReadingSnapshot()
+    }
+
     /**
      * 更新进度条位置
      */

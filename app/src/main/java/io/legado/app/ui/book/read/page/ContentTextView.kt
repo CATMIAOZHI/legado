@@ -584,6 +584,37 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
         return visiblePage
     }
 
+    fun getVisibleReadingSnapshot(): io.legado.app.model.VisibleReadingSnapshot? {
+        val book = ReadBook.book ?: return null
+        val visible = mutableListOf<Pair<io.legado.app.ui.book.read.page.entities.TextChapter, TextLine>>()
+        for (relativePos in 0..2) {
+            val offset = relativeOffset(relativePos)
+            if (relativePos > 0 && (!callBack.isScroll || offset >= ChapterProvider.visibleHeight)) break
+            val page = relativePage(relativePos)
+            if (page.isMsgPage) return null
+            page.lines.filter { it.isVisible(offset) }.forEach { visible.add(page.textChapter to it) }
+        }
+        val chapter = visible.lastOrNull()?.first ?: return null
+        val index = chapter.chapter.index
+        if (chapter.chapter.bookUrl != book.bookUrl ||
+            listOf(ReadBook.prevTextChapter, ReadBook.curTextChapter, ReadBook.nextTextChapter).none { it === chapter }
+        ) return null
+        if (!chapter.isCompleted || chapter.isTransient || chapter.operitReviewContractHash == null) return null
+        // Special rendering can replace image tags or other source characters with placeholders.
+        // Only convert layout offsets when the rendered body preserves the source coordinates.
+        val renderedBody = chapter.pages.joinToString("") { it.text }.drop(chapter.layoutTitleLength.coerceAtLeast(0))
+        if (renderedBody != chapter.bodyContent && renderedBody != chapter.bodyContent + "\n") return null
+        val lines = visible.filter { it.first === chapter }.map { it.second }
+        val start = lines.first().chapterPosition
+        val end = lines.last().let { it.chapterPosition + it.charSize }
+        val range = io.legado.app.model.visibleBodyRange(start, end, chapter.layoutTitleLength, chapter.bodyContent.length)
+            ?: return null
+        return io.legado.app.model.VisibleReadingSnapshot(
+            book.bookUrl, index, chapter.chapter.title, start, range.first, range.last + 1,
+            chapter.bodyContent.take(range.last + 1),
+        )
+    }
+
     fun getReadPosition(): Pair<Int, TextLine>? {
         if (textPage.isMsgPage) return null
         val offset = relativeOffset(0)
