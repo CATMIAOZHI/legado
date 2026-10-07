@@ -63,6 +63,11 @@ import io.legado.app.databinding.DialogRecyclerViewBinding
 import io.legado.app.databinding.ItemReviewCommentBinding
 import io.legado.app.ui.widget.dialog.PhotoDialog
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.Dispatchers.Main
 import splitties.systemservices.windowManager
@@ -82,6 +87,8 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         ruleHash: Int,
         aiAuthority: String? = null,
         aiContentHash: String? = null,
+        aiParagraphIndex: Int = paragraphNum,
+        aiCount: Int = 0,
     ) : this() {
         arguments = Bundle().apply {
             putInt(ARG_PARAGRAPH_NUM, paragraphNum)
@@ -93,6 +100,8 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
             putInt(ARG_RULE_HASH, ruleHash)
             putString(ARG_AI_AUTHORITY, aiAuthority)
             putString(ARG_AI_CONTENT_HASH, aiContentHash)
+            putInt(ARG_AI_PARAGRAPH_INDEX, aiParagraphIndex)
+            putInt("ai_count", aiCount)
         }
     }
 
@@ -100,6 +109,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
     private val adapter by lazy { ReviewAdapter(requireContext()) }
     private var paragraphNum: Int = 0
     private var totalCount: Int = 0
+    private var nativeTotalCount: Int = 0
     private var chapterIndex: Int = 0
     private var paragraphData: String = ""
     private var bookUrl: String = ""
@@ -107,6 +117,14 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
     private var ruleHash: Int = 0
     private var aiAuthority: String = ""
     private var aiContentHash: String = ""
+    private var aiParagraphIndex: Int = 0
+    private var aiDetailItems: List<ReviewDetailItem> = emptyList()
+    private var aiRefreshJob: Job? = null
+    private var aiRefreshPending = false
+    private var aiObserverRegistered = false
+    private val aiObserver = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) { scheduleAiRefresh() }
+    }
     private var isLoading = false
     private var hasMore = true
     private var currentPage = 1
@@ -212,6 +230,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
     override fun onFragmentCreated(view: View, savedInstanceState: Bundle?) {
         paragraphNum = arguments?.getInt(ARG_PARAGRAPH_NUM) ?: 0
         totalCount = arguments?.getInt(ARG_TOTAL_COUNT) ?: 0
+        nativeTotalCount = (totalCount - (arguments?.getInt("ai_count") ?: 0)).coerceAtLeast(0)
         chapterIndex = arguments?.getInt(ARG_CHAPTER_INDEX) ?: 0
         paragraphData = arguments?.getString(ARG_PARAGRAPH_DATA).orEmpty()
         bookUrl = arguments?.getString(ARG_BOOK_URL).orEmpty()
@@ -219,6 +238,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         ruleHash = arguments?.getInt(ARG_RULE_HASH) ?: 0
         aiAuthority = arguments?.getString(ARG_AI_AUTHORITY).orEmpty()
         aiContentHash = arguments?.getString(ARG_AI_CONTENT_HASH).orEmpty()
+        aiParagraphIndex = arguments?.getInt(ARG_AI_PARAGRAPH_INDEX,paragraphNum) ?: paragraphNum
         binding.root.setBackgroundResource(R.drawable.bg_dialog_round_top)
         binding.dragHandle.visible()
         binding.toolBar.setBackgroundResource(R.drawable.bg_review_toolbar)
@@ -234,10 +254,11 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         if (oldCountView != null) {
             binding.toolBar.removeView(oldCountView)
         }
-        if (totalCount > 0) {
+        run {
             val countView = TextView(requireContext()).apply {
                 tag = "review_count_tag"
                 text = getString(R.string.review_total_count, totalCount)
+                visibility = if (totalCount > 0) View.VISIBLE else View.GONE
                 setTextColor(getCompatColor(R.color.secondaryText))
                 textSize = 14f
                 includeFontPadding = false
@@ -279,6 +300,14 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
             }
         })
         loadDetailPage(paragraphNum, 1, append = false)
+        OperitAiReviewClient.reviewRoots().forEach {
+            requireContext().contentResolver.registerContentObserver(it,true,aiObserver)
+            aiObserverRegistered = true
+        }
+        binding.tvMsg.setOnClickListener {
+            if (detailItems.isEmpty() && aiDetailItems.isEmpty()) loadDetailPage(paragraphNum,1,false)
+            else scheduleAiRefresh()
+        }
     }
 
     private fun setupHeightDrag() {
@@ -350,8 +379,48 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
     }
 
     override fun onDestroyView() {
+        aiRefreshJob?.cancel()
+        if (aiObserverRegistered) {
+            requireContext().contentResolver.unregisterContentObserver(aiObserver)
+            aiObserverRegistered = false
+        }
         releaseAudioPlayer()
         super.onDestroyView()
+    }
+
+    private fun scheduleAiRefresh() {
+        if (view == null) return
+        if (isLoading) { aiRefreshPending = true; return }
+        aiRefreshJob?.cancel()
+        aiRefreshJob = viewLifecycleOwner.lifecycleScope.launch {
+            delay(200)
+            val contract = ReadBook.curTextChapter?.takeIf {
+                ReadBook.book?.bookUrl == bookUrl && it.chapter.index == chapterIndex
+            }?.operitReviewContract ?: return@launch
+            val result = withContext(IO) {
+                val summary = OperitAiReviewClient.getSummary(bookUrl,chapterIndex,contract.hash,contract)
+                val authority = summary?.authority ?: aiAuthority
+                val hash = summary?.contentHash ?: aiContentHash
+                val sourceIndex = if (summary == null) aiParagraphIndex
+                    else summary.sourceParagraphIndices[paragraphNum] ?: 0
+                val items = if (summary != null && paragraphNum !in summary.counts) emptyList()
+                    else if (authority.isBlank() || hash.isBlank() || sourceIndex <= 0) null
+                    else OperitAiReviewClient.getDetail(authority,bookUrl,chapterIndex,sourceIndex,hash)
+                Triple(summary,sourceIndex,items)
+            }
+            val items = result.third ?: return@launch // Transport failure must not erase usable content.
+            result.first?.let { aiAuthority = it.authority; aiContentHash = it.contentHash }
+            aiParagraphIndex = result.second
+            aiDetailItems = items
+            totalCount = nativeTotalCount + (result.first?.counts?.get(paragraphNum) ?: items.size)
+            binding.toolBar.findViewWithTag<TextView>("review_count_tag")?.apply {
+                text = getString(R.string.review_total_count, totalCount)
+                visibility = if (totalCount > 0) View.VISIBLE else View.GONE
+            }
+            renderUiItems()
+            if (items.isNotEmpty() || detailItems.isNotEmpty()) binding.tvMsg.gone()
+            else { binding.tvMsg.text = getString(R.string.content_empty); binding.tvMsg.visible() }
+        }
     }
 
     private fun ensureAudioPlayer(): ExoPlayer {
@@ -448,33 +517,36 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         }
         if (!hasMore) return
         isLoading = true
-        Coroutine.async(lifecycleScope, IO, start = CoroutineStart.LAZY) {
+        Coroutine.async(viewLifecycleOwner.lifecycleScope, IO, start = CoroutineStart.LAZY) {
             val book = ReadBook.book ?: return@async null
             if (book.bookUrl != bookUrl) return@async null
             val aiItems = if (
                 page == 1 &&
                 aiAuthority.isNotBlank() &&
+                aiParagraphIndex > 0 &&
                 aiContentHash.isNotBlank()
             ) {
                 OperitAiReviewClient.getDetail(
                     authority = aiAuthority,
                     bookId = bookUrl,
                     chapterIndex = chapterIndex,
-                    paragraphIndex = paragraphNum,
+                    paragraphIndex = aiParagraphIndex,
                     contentHash = aiContentHash,
-                )
+                ).orEmpty()
             } else {
                 emptyList()
             }
             fun aiOnlyResult() = aiItems.takeIf { it.isNotEmpty() }?.let {
                 ReviewResult(
-                    items = it,
+                    items = emptyList(),
+                    aiItems = it,
                     nextPageUrl = null,
                     hasNextPageRule = false,
                     hasReplyUrl = false,
                     source = null,
                 )
             }
+            try {
             if (sourceKey.isBlank()) return@async aiOnlyResult()
             val source = ReadBook.bookSource ?: return@async aiOnlyResult()
             if (source.getKey() != sourceKey) return@async aiOnlyResult()
@@ -491,7 +563,8 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
                     page = page,
                 ) ?: return@async aiOnlyResult()
                 return@async ReviewResult(
-                    items = aiItems + result.items,
+                    items = result.items,
+                    aiItems = aiItems,
                     nextPageUrl = result.nextPageUrl,
                     hasNextPageRule = true,
                     hasReplyUrl = JsSourceReview.hasReviewRepliesCapability(source),
@@ -546,7 +619,8 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
                 page = page.toString()
             )
             ReviewResult(
-                items = aiItems + result.items,
+                items = result.items,
+                aiItems = aiItems,
                 nextPageUrl = result.nextPageUrl,
                 hasNextPageRule = nextPageUrlRule != null,
                 hasReplyUrl = !rule.reviewQuoteUrl.isNullOrBlank() &&
@@ -554,12 +628,18 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
                         !rule.replyContentRule.isNullOrBlank(),
                 source = source,
             )
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) { aiOnlyResult() ?: throw error }
         }.onSuccess(Main) { result ->
+            if (!append) aiDetailItems = result?.aiItems.orEmpty()
+            isLoading = false
+            if (aiRefreshPending) { aiRefreshPending = false; scheduleAiRefresh() }
             if (!append) {
                 binding.rotateLoading.gone()
             }
             result?.source?.let { reviewSource = it }
             result?.let { hasReplyUrl = it.hasReplyUrl }
+            if (result?.source == null) hasMore = false
             val items = result?.items.orEmpty()
             val nextUrlFromRule = result?.nextPageUrl
             if (result?.hasNextPageRule == true) {
@@ -568,14 +648,14 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
                     hasMore = false
                 }
             }
-            if (items.isEmpty() && !append) {
+            if (items.isEmpty() && aiDetailItems.isEmpty() && !append) {
                 hasMore = false
                 binding.tvMsg.text = getString(R.string.content_empty)
                 binding.tvMsg.visible()
                 isLoading = false
                 return@onSuccess
             }
-            if (items.isEmpty()) {
+            if (items.isEmpty() && append) {
                 hasMore = false
                 isLoading = false
                 return@onSuccess
@@ -591,6 +671,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
             isLoading = false
         }.onError {
             isLoading = false
+            if (aiRefreshPending) { aiRefreshPending = false; scheduleAiRefresh() }
             if (!append) {
                 binding.rotateLoading.gone()
                 binding.tvMsg.text = it.localizedMessage ?: getString(R.string.content_empty)
@@ -797,6 +878,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         val hasNextPageRule: Boolean,
         val hasReplyUrl: Boolean,
         val source: BaseSource?,
+        val aiItems: List<ReviewDetailItem> = emptyList(),
     )
 
     private data class ReplyResult(
@@ -876,7 +958,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
     }
 
     private fun renderUiItems() {
-        val uiItems = flattenItems(detailItems)
+        val uiItems = flattenItems(aiDetailItems + detailItems)
         adapter.setItems(uiItems, uiItemDiffCallback, skipDiff = true)
     }
 
@@ -908,6 +990,7 @@ class ReviewDetailDialog() : BaseDialogFragment(R.layout.dialog_recycler_view) {
         const val ARG_RULE_HASH = "ruleHash"
         const val ARG_AI_AUTHORITY = "aiAuthority"
         const val ARG_AI_CONTENT_HASH = "aiContentHash"
+        const val ARG_AI_PARAGRAPH_INDEX = "aiParagraphIndex"
         const val TYPE_NORMAL = 0
         const val TYPE_MORE = 1
         const val PAYLOAD_AUDIO_STATE = "review_audio_state"

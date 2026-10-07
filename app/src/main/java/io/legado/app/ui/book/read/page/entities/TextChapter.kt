@@ -53,7 +53,8 @@ data class TextChapter(
     @Transient
     @Volatile
     var bodyContent: String = ""
-    var operitReviewContractHash: String? = null
+    internal var operitReviewContract: io.legado.app.api.OperitReviewParagraphContract? = null
+    val operitReviewContractHash: String? get() = operitReviewContract?.hash
 
     val layoutChannel get() = layout!!.channel
 

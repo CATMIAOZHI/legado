@@ -10,7 +10,12 @@ internal data class OperitReviewParagraph(
 internal data class OperitReviewParagraphContract(
     val hash: String,
     val paragraphs: List<OperitReviewParagraph>,
-)
+) {
+    val uniqueFingerprints: Map<String, Int> by lazy {
+        paragraphs.groupBy { OperitReviewParagraphContractSupport.fingerprint(it.text) }
+            .filterValues { it.size == 1 }.mapValues { it.value.single().id }
+    }
+}
 
 /**
  * Defines the paragraph IDs shared by Legado's Review UI and Operit's AI comments.
@@ -19,6 +24,10 @@ internal data class OperitReviewParagraphContract(
  * chapter will number them. Ordinary non-blank BookContent entries map one-to-one to review IDs.
  */
 internal object OperitReviewParagraphContractSupport {
+    const val MAPPING_VERSION = "paragraph-fingerprint-v1"
+    fun fingerprint(text: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(("operit-review-paragraph-fingerprint-v1\u0000" + text).toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
     fun fromTextList(textList: List<String>): OperitReviewParagraphContract? {
         if (
             textList.any { text ->

@@ -33,6 +33,7 @@ import io.legado.app.help.book.isPdf
 import io.legado.app.help.book.isUmd
 import io.legado.app.help.book.removeLocalUriCache
 import io.legado.app.help.book.simulatedTotalChapterNum
+import io.legado.app.help.book.update
 import io.legado.app.help.config.AppConfig
 import io.legado.app.lib.webdav.WebDav
 import io.legado.app.lib.webdav.WebDavException
@@ -174,6 +175,8 @@ object LocalBook {
 
     @Throws(TocEmptyException::class)
     fun getChapterList(book: Book): ArrayList<BookChapter> {
+        val isTxt = !book.isEpub && !book.isUmd && !book.isPdf && !book.isMobi
+        val oldChapter = if (isTxt) appDb.bookChapterDao.getChapter(book.bookUrl, book.durChapterIndex) else null
         val chapters = when {
             book.isEpub -> {
                 EpubFile.getChapterList(book)
@@ -207,6 +210,15 @@ object LocalBook {
         }
         val replaceRules = ContentProcessor.get(book).getTitleReplaceRules()
         val replaceBook = book.toReplaceBook()
+        oldChapter?.start?.let { oldStart ->
+            remapTxtPosition(oldStart, oldChapter.end, book.durChapterPos,
+                list.filter { !it.isVolume && it.start != null && it.end != null }
+                    .map { TxtChapterRange(it.index, it.start!!, it.end!!) }
+            )?.let { (index, position) ->
+                book.durChapterIndex = index
+                book.durChapterPos = position
+            }
+        }
         book.durChapterTitle = list.getOrElse(book.durChapterIndex) { list.last() }
             .getDisplayTitle(
                 replaceRules,
@@ -223,6 +235,15 @@ object LocalBook {
         book.totalChapterNum = list.size
         book.latestChapterTime = System.currentTimeMillis()
         return list
+    }
+
+    /** Readers must never observe the new catalog paired with the old numeric reading position. */
+    fun saveChapterList(book: Book, chapters: List<BookChapter>) {
+        appDb.runInTransaction {
+            appDb.bookChapterDao.delByBook(book.bookUrl)
+            appDb.bookChapterDao.insert(*chapters.toTypedArray())
+            book.update()
+        }
     }
 
     fun getContent(book: Book, chapter: BookChapter): String? {

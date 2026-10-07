@@ -45,9 +45,7 @@ class TocViewModel(application: Application) : BaseViewModel(application) {
         execute {
             book.update()
             LocalBook.getChapterList(book).let {
-                appDb.bookChapterDao.delByBook(book.bookUrl)
-                appDb.bookChapterDao.insert(*it.toTypedArray())
-                book.update()
+                LocalBook.saveChapterList(book, it)
                 ReadBook.onChapterListUpdated(book)
                 bookData.postValue(book)
             }

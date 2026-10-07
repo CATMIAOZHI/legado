@@ -235,6 +235,7 @@ object AutoTaskProtocol {
             appDb.bookChapterDao.insert(*chapters.toTypedArray())
             book.update()
         }
+        if (book.isLocal) ReadBook.onChapterListUpdated(book)
         coroutineContext.ensureActive()
         return chapters
     }

@@ -214,9 +214,8 @@ object BookController {
                 ?: return returnData.setErrorMsg("未在数据库找到对应书籍，请先添加")
             if (book.isLocal) {
                 val toc = LocalBook.getChapterList(book)
-                appDb.bookChapterDao.delByBook(book.bookUrl)
-                appDb.bookChapterDao.insert(*toc.toTypedArray())
-                book.update()
+                LocalBook.saveChapterList(book, toc)
+                ReadBook.onChapterListUpdated(book)
                 return returnData.setData(toc)
             } else {
                 val bookSource = appDb.bookSourceDao.getBookSource(book.origin)
@@ -483,7 +482,9 @@ object BookController {
                     }
                 }
             }
-            if (visible != null) return ReadingBoundarySnapshot(
+            if (visible != null && visible.chapterUrl ==
+                appDb.bookChapterDao.getChapter(book.bookUrl, visible.chapterIndex)?.url
+            ) return ReadingBoundarySnapshot(
                 bookUrl = visible.bookUrl,
                 chapterIndex = visible.chapterIndex,
                 chapterTitle = visible.chapterTitle,
@@ -503,18 +504,28 @@ object BookController {
         val liveBoundary = ReadBook.liveReadableBoundary?.takeIf {
             it.bookUrl == book.bookUrl
         }
-        val chapterIndex = liveBoundary?.chapterIndex ?: book.durChapterIndex
-        val layoutPosition = liveBoundary?.layoutPosition ?: book.durChapterPos
+        val (savedBook, currentChapter) = appDb.runInTransaction(java.util.concurrent.Callable {
+            val saved = appDb.bookDao.getBook(book.bookUrl) ?: book
+            saved to appDb.bookChapterDao.getChapter(book.bookUrl, liveBoundary?.chapterIndex ?: saved.durChapterIndex)
+        })
+        val chapterIndex = liveBoundary?.chapterIndex ?: savedBook.durChapterIndex
+        val layoutPosition = liveBoundary?.layoutPosition ?: savedBook.durChapterPos
+        val persistedSnapshot = if (liveBoundary == null) ReadableSnapshotStore.load(book.bookUrl) else null
         val readableSnapshot = if (liveBoundary != null) {
             liveBoundary.safeSnapshot?.takeIf {
                 it.chapterIndex == chapterIndex &&
+                    it.chapterUrl != null && it.chapterUrl == currentChapter?.url &&
                     it.layoutPosition == layoutPosition
             }
         } else {
-            ReadableSnapshotStore.load(book.bookUrl)?.takeIf {
+            persistedSnapshot?.takeIf {
                 it.chapterIndex == chapterIndex &&
+                    it.chapterUrl != null && it.chapterUrl == currentChapter?.url &&
                     it.layoutPosition == layoutPosition
             }
+        }
+        check((liveBoundary == null && persistedSnapshot == null) || readableSnapshot != null) {
+            "阅读目录或位置正在更新，请等待正文加载后重试"
         }
         val resolvedBodyPosition = readableSnapshot?.bodyPosition
         val resolvedBodyContent = readableSnapshot?.content

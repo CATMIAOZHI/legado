@@ -106,6 +106,8 @@ jobs:
             --tests io.legado.app.api.ReaderProviderRoutesTest \
             --tests io.legado.app.api.ReviewWebApiContractTest \
             --tests io.legado.app.model.ReadableSnapshotStoreTest \
+            --tests io.legado.app.model.VisibleReadingSnapshotTest \
+            --tests io.legado.app.api.TxtChapterBoundaryTest \
             --tests io.legado.app.model.localBook.LocalBookCachedReadTest \
             --tests io.legado.app.model.jsSource.JsSourceReviewTest \
             --tests io.legado.app.ui.book.read.JsSourceReviewDispatchSourceTest \
@@ -163,11 +165,12 @@ jobs:
         run: |
           {
             printf '基于 Legado 稳定版 3.26082823 的 Operit 阅读伴侣适配版。\n\n'
-            printf -- '- 同步上游稳定版 3.26082823。\n'
-            printf -- '- 保留 Operit AI 段评与安全正文接口。\n'
-            printf -- '- 修复段评预览在绘制过程中移除视图导致的崩溃。\n'
-            printf -- '- 阅读伴侣可读取已下载旧章；缺失内容不联网补章，也不触发 WebDAV 恢复。\n'
-            printf -- '- 章节目录插入、更新或净化替换时，按稳定章节 URL 读取，避免章节错位。\n\n'
+            printf -- '- 修复 TXT 超长章节拆分时截尾、串章和混入下一章标题。\n'
+            printf -- '- 目录重建与阅读进度原子更新；拆分范围变化后保守回到对应子节开头。\n'
+            printf -- '- 阅读快照携带章节身份，拒绝将旧正文配到新目录。\n'
+            printf -- '- 翻页进度通知后台合并；段评窗口自动刷新，原生书评失败时保留 AI 段评。\n'
+            printf -- '- 唯一段落指纹匹配避免评论串段，评论增删后同步更新数量。\n\n'
+            printf '已有 TXT 请在更新后重新解析一次目录，使已存字节范围和伴读缓存更新。\n\n'
             printf '包名：`com.legado.app.debug`  \n'
             printf '版本码：`%s`  \n' "$VERSION_CODE"
             printf '提交：`%s`  \n\n' "$BUILD_COMMIT"

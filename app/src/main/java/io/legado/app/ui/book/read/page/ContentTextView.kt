@@ -612,6 +612,7 @@ class ContentTextView(context: Context, attrs: AttributeSet?) : View(context, at
         return io.legado.app.model.VisibleReadingSnapshot(
             book.bookUrl, index, chapter.chapter.title, start, range.first, range.last + 1,
             chapter.bodyContent.take(range.last + 1),
+            chapter.chapter.url,
         )
     }
 

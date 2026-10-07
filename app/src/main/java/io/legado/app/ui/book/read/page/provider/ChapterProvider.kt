@@ -272,8 +272,8 @@ object ChapterProvider {
             isTransient = !saveChapterData,
         ).apply {
             bodyContent = bookContent.toString()
-            operitReviewContractHash =
-                OperitReviewParagraphContractSupport.fromTextList(bookContent.textList)?.hash
+            operitReviewContract =
+                OperitReviewParagraphContractSupport.fromTextList(bookContent.textList)
             createLayout(scope, book, bookContent, saveChapterData)
         }
 

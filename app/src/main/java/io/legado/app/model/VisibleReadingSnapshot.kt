@@ -8,6 +8,7 @@ data class VisibleReadingSnapshot(
     val bodyStart: Int,
     val bodyEnd: Int,
     val content: String,
+    val chapterUrl: String,
 )
 
 internal fun visibleBodyRange(start: Int, end: Int, titleLength: Int, bodyLength: Int): IntRange? {

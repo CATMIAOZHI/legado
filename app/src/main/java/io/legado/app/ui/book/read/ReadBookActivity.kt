@@ -2048,8 +2048,10 @@ class ReadBookActivity : BaseReadBookActivity(),
                 bookUrl = book.bookUrl,
                 sourceKey = sourceKey,
                 ruleHash = ruleHash,
-                aiAuthority = aiSummary?.authority,
-                aiContentHash = aiSummary?.contentHash,
+                aiAuthority = aiSummary?.takeIf { paragraphNum in it.sourceParagraphIndices }?.authority,
+                aiContentHash = aiSummary?.takeIf { paragraphNum in it.sourceParagraphIndices }?.contentHash,
+                aiParagraphIndex = aiSummary?.sourceParagraphIndices?.get(paragraphNum) ?: 0,
+                aiCount = aiCount,
             )
         )
     }
@@ -2299,6 +2301,7 @@ class ReadBookActivity : BaseReadBookActivity(),
                 bookId = book.bookUrl,
                 chapterIndex = chapterIndex,
                 contentHash = contentHash,
+                contract = textChapter?.operitReviewContract,
             )
         }.onSuccess(Main) { result ->
             if (requestGeneration != aiReviewRequestGeneration) return@onSuccess

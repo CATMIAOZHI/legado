@@ -10,6 +10,7 @@ internal data class OperitAiReviewSummary(
     val contentHash: String,
     val counts: Map<Int, Int>,
     val previews: Map<Int, String>,
+    val sourceParagraphIndices: Map<Int, Int> = emptyMap(),
 )
 
 internal object OperitAiReviewClient {
@@ -17,6 +18,7 @@ internal object OperitAiReviewClient {
         bookId: String,
         chapterIndex: Int,
         contentHash: String,
+        contract: OperitReviewParagraphContract? = null,
     ): OperitAiReviewSummary? {
         for (authority in installedAuthorities()) {
             val data = query(
@@ -26,18 +28,29 @@ internal object OperitAiReviewClient {
                     "bookId" to bookId,
                     "chapterIndex" to chapterIndex.toString(),
                     "contentHash" to contentHash,
+                    "mappingVersion" to OperitReviewParagraphContractSupport.MAPPING_VERSION,
                 ),
             ) ?: continue
             if (!data.optBoolean("enabled") || !data.optBoolean("ready")) continue
             val comments = data.optJSONArray("comments") ?: continue
             val counts = linkedMapOf<Int, Int>()
             val previews = linkedMapOf<Int, String>()
+            val sources = linkedMapOf<Int,Int>()
+            val ambiguous = hashSetOf<Int>()
             repeat(comments.length()) { index ->
                 val item = comments.optJSONObject(index) ?: return@repeat
-                val paragraphIndex = item.optInt("paragraphIndex")
+                val sourceIndex = item.optInt("paragraphIndex")
+                val paragraphIndex = mapOperitParagraph(data,item,contentHash,contract) ?: return@repeat
+                if (paragraphIndex in ambiguous) return@repeat
+                if (paragraphIndex in sources) {
+                    ambiguous += paragraphIndex
+                    sources.remove(paragraphIndex); counts.remove(paragraphIndex); previews.remove(paragraphIndex)
+                    return@repeat
+                }
                 val count = item.optInt("count")
                 if (paragraphIndex <= 0 || count <= 0) return@repeat
                 counts[paragraphIndex] = count
+                sources[paragraphIndex] = sourceIndex
                 item.optString("preview").trim().takeIf(String::isNotBlank)?.let {
                     previews[paragraphIndex] = it
                 }
@@ -47,6 +60,7 @@ internal object OperitAiReviewClient {
                 contentHash = data.optString("contentHash", contentHash),
                 counts = counts,
                 previews = previews,
+                sourceParagraphIndices = sources,
             )
         }
         return null
@@ -58,7 +72,7 @@ internal object OperitAiReviewClient {
         chapterIndex: Int,
         paragraphIndex: Int,
         contentHash: String,
-    ): List<ReviewRuleParser.DetailItem> {
+    ): List<ReviewRuleParser.DetailItem>? {
         val data = query(
             authority = authority,
             path = "reviews/detail",
@@ -68,7 +82,7 @@ internal object OperitAiReviewClient {
                 "paragraphIndex" to paragraphIndex.toString(),
                 "contentHash" to contentHash,
             ),
-        ) ?: return emptyList()
+        ) ?: return null
         if (!data.optBoolean("ready")) return emptyList()
         val comments = data.optJSONArray("comments") ?: return emptyList()
         return buildList {
@@ -79,7 +93,7 @@ internal object OperitAiReviewClient {
                 val badges = item.optJSONArray("badges")
                 add(
                     ReviewRuleParser.DetailItem(
-                        id = "operit-ai-${item.optLong("id", index.toLong())}",
+                        id = "operit-ai-${item.optString("id", index.toString())}",
                         avatar = null,
                         name = item.optString("name", "AI 伴读"),
                         replyToName = null,

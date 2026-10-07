@@ -2,6 +2,8 @@ package io.legado.app.api
 
 import android.net.Uri
 import splitties.init.appCtx
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 
 /**
  * Sends a content-free wake-up hint after Legado has published an exact readable boundary.
@@ -10,7 +12,23 @@ import splitties.init.appCtx
  * No book identity, position, or novel text leaves Legado through this broadcast.
  */
 internal object OperitReadingCompanionBridge {
+    private val pending = Channel<Unit>(Channel.CONFLATED)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    init {
+        scope.launch {
+            for (ignored in pending) {
+                delay(250)
+                // Rapid page turns only need one content-free hint; Operit re-reads the latest boundary.
+                while (pending.tryReceive().isSuccess) { }
+                notifyProviders()
+            }
+        }
+    }
     fun notifyReadingProgressChanged() {
+        pending.trySend(Unit)
+    }
+
+    private fun notifyProviders() {
         OPERIT_AUTHORITIES.forEach { authority ->
             runCatching {
                 appCtx.contentResolver.call(

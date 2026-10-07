@@ -13,6 +13,7 @@ internal data class PersistedReadableSnapshot(
     val bodyPosition: Int,
     val content: String,
     val capturedAt: Long,
+    val chapterUrl: String? = null,
 )
 
 internal fun createReadableSnapshot(
@@ -22,6 +23,7 @@ internal fun createReadableSnapshot(
     layoutTitleLength: Int,
     bodyContent: String,
     capturedAt: Long = System.currentTimeMillis(),
+    chapterUrl: String? = null,
 ): PersistedReadableSnapshot? {
     if (layoutTitleLength < 0) return null
     val bodyPosition = (layoutPosition - layoutTitleLength).coerceIn(0, bodyContent.length)
@@ -32,6 +34,7 @@ internal fun createReadableSnapshot(
         bodyPosition = bodyPosition,
         content = bodyContent.take(bodyPosition),
         capturedAt = capturedAt,
+        chapterUrl = chapterUrl,
     )
 }
 

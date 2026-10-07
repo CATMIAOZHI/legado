@@ -1643,6 +1643,7 @@ object ReadBook : CoroutineScope by MainScope() {
                 layoutPosition = layoutPosition,
                 layoutTitleLength = chapter.layoutTitleLength,
                 bodyContent = chapter.bodyContent,
+                chapterUrl = chapter.chapter.url,
             )
         }
         val publishedBoundary = expectedBoundary.copy(
@@ -1740,6 +1741,12 @@ object ReadBook : CoroutineScope by MainScope() {
         if (newBook.isSameNameAuthor(book)) {
             val positionAnchor = if (callBack == null) currentPositionAnchor() else null
             book = newBook
+            if (newBook.isLocal) {
+                durChapterIndex = newBook.durChapterIndex
+                durChapterPos = newBook.durChapterPos
+                publishReadableBoundaryUnavailable()
+                clearTextChapter()
+            }
             chapterSize = newBook.totalChapterNum
             simulatedChapterSize = newBook.simulatedTotalChapterNum()
             if (simulatedChapterSize > 0 && durChapterIndex > simulatedChapterSize - 1) {

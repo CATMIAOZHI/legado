@@ -220,9 +220,7 @@ class ReadBookViewModel(application: Application) : BaseViewModel(application) {
         if (book.isLocal) {
             kotlin.runCatching {
                 LocalBook.getChapterList(book).let {
-                    appDb.bookChapterDao.delByBook(book.bookUrl)
-                    appDb.bookChapterDao.insert(*it.toTypedArray())
-                    book.update()
+                    LocalBook.saveChapterList(book, it)
                     ReadBook.onChapterListUpdated(book)
                 }
                 return true

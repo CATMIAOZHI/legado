@@ -292,9 +292,7 @@ class BookInfoViewModel(application: Application) : BaseViewModel(application) {
         if (book.isLocal) {
             execute(scope) {
                 LocalBook.getChapterList(book).let {
-                    book.update()
-                    appDb.bookChapterDao.delByBook(book.bookUrl)
-                    appDb.bookChapterDao.insert(*it.toTypedArray())
+                    LocalBook.saveChapterList(book, it)
                     ReadBook.onChapterListUpdated(book)
                     bookData.postValue(book)
                     chapterListData.postValue(it)
