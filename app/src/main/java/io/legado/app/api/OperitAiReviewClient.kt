@@ -94,7 +94,9 @@ internal object OperitAiReviewClient {
                 add(
                     ReviewRuleParser.DetailItem(
                         id = "operit-ai-${item.optString("id", index.toString())}",
-                        avatar = null,
+                        // Operit sends Orbit's picture as a small data URL; anything else is ignored.
+                        avatar = item.optString("avatar").trim()
+                            .takeIf { it.startsWith("data:image/") },
                         name = item.optString("name", "AI 伴读"),
                         replyToName = null,
                         badges = buildList {
